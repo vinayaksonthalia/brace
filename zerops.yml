@@ -1,0 +1,61 @@
+# Brace — build & deploy recipe for Zerops.
+#
+# Two setups, deployed independently:
+#
+#   zcli push --serviceId <api service>          # from the repo root, setup: api
+#   zcli push --serviceId <web service> --setup web --workingDir ./web
+#
+# The `api` setup compiles cmd/brace and ships a single static binary. The
+# `web` setup ships the finished dashboard to the static service; run it with
+# --workingDir ./web so the deployed root is the dashboard itself and
+# index.html lands at /.
+#
+# The database credentials are NOT written here. The api service reads them
+# from a `db_` reference that Zerops injects (Project settings → Environment
+# variables → import from service `db`), which is why BRACE_ADMIN_URL below is
+# a template over ${db_superUser} / ${db_superUserPassword} / ${db_hostname}
+# rather than anything checked into git. If those references are absent the
+# process falls back to composing the DSN from superUser/superUserPassword and
+# the hostname `db` — see internal/boot.FromEnv.
+
+zerops:
+  - setup: api
+    build:
+      base: go@1
+      buildCommands:
+        - go build -o app ./cmd/brace
+      deployFiles:
+        - app
+    run:
+      base: go@1
+      ports:
+        - port: 8080
+          httpSupport: true
+      envVariables:
+        # Superuser DSN for the maintenance database. The lab needs superuser:
+        # it creates and drops databases (the twins) on every run.
+        BRACE_ADMIN_URL: postgres://${db_superUser}:${db_superUserPassword}@${db_hostname}:5432/postgres
+        PORT: "8080"
+        # Warm twins kept ready. Each one is a full copy of the template, so
+        # this is the disk multiplier as much as it is the concurrency.
+        POOL_SIZE: "2"
+        # Concurrent writers in the simulated application.
+        WORKERS: "24"
+        # Template size. Ten million unindexed rows is what makes a naive
+        # CREATE INDEX take long enough to be an outage rather than a blip.
+        SEED_ROWS: "10000000"
+      start: ./app
+      # /healthz answers as soon as the listener is up — deliberately before
+      # the template has finished seeding, which on a cold project takes
+      # minutes. /api/* reports {"error":"starting","phase":...} until ready.
+      healthCheck:
+        httpGet:
+          port: 8080
+          path: /healthz
+
+  - setup: web
+    build:
+      base: static
+      deployFiles: ./
+    run:
+      base: static
