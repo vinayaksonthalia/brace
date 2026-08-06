@@ -23,11 +23,13 @@ func discardLogger() *slog.Logger {
 // down without paying for an 80-second clone.
 func newTestManager(poolSize int, warm ...*Twin) *Manager {
 	return &Manager{
-		cfg:        Config{PoolSize: poolSize, NamePrefix: defaultNamePrefix, TemplateName: "brace_template"},
-		log:        discardLogger(),
-		warm:       warm,
-		checkedOut: make(map[string]*Twin),
-		refill:     make(chan struct{}, 1),
+		cfg:         Config{PoolSize: poolSize, NamePrefix: defaultNamePrefix, TemplateName: "brace_template"},
+		log:         discardLogger(),
+		warm:        warm,
+		checkedOut:  make(map[string]*Twin),
+		pendingDrop: make(map[string]*Twin),
+		released:    make(map[string]struct{}),
+		refill:      make(chan struct{}, 1),
 	}
 }
 

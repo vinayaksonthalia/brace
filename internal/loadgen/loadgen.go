@@ -35,6 +35,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"math/rand"
 	"strconv"
 	"strings"
@@ -135,6 +136,7 @@ func (c Config) validate() error {
 		return errors.New("loadgen: Config.DSN is required")
 	}
 	seen := make(map[string]bool, len(c.Labels))
+	total := 0
 	for i, l := range c.Labels {
 		if strings.TrimSpace(l.Name) == "" {
 			return fmt.Errorf("loadgen: Labels[%d].Name is empty", i)
@@ -149,6 +151,17 @@ func (c Config) validate() error {
 		if strings.TrimSpace(l.Statement) == "" {
 			return fmt.Errorf("loadgen: label %q has an empty Statement", l.Name)
 		}
+		// The picker draws a single rand below the summed weight. Weights that
+		// sum past MaxInt wrap negative, and rand.Intn panics on a non-positive
+		// bound — inside a worker goroutine, so it is unrecoverable.
+		if total > math.MaxInt-l.Weight {
+			return fmt.Errorf("loadgen: label weights overflow int at %q (running total %d + %d)",
+				l.Name, total, l.Weight)
+		}
+		total += l.Weight
+	}
+	if len(c.Labels) > 0 && total <= 0 {
+		return fmt.Errorf("loadgen: total label weight is %d, want a positive total", total)
 	}
 	return nil
 }
@@ -211,7 +224,10 @@ func Classify(err error) Outcome {
 	}
 
 	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) {
+	// The nil check is load-bearing: errors.As happily matches a typed-nil
+	// *pgconn.PgError, and reading .Code off it would panic inside a worker
+	// goroutine, taking the process with it.
+	if errors.As(err, &pgErr) && pgErr != nil {
 		switch pgErr.Code {
 		case sqlstateLockNotAvailable:
 			// 55P03 — "canceling statement due to lock timeout" on PG16. The
@@ -268,8 +284,13 @@ type Generator struct {
 	mu      sync.Mutex
 	started bool
 	stopped bool
-	cancel  context.CancelFunc
-	wg      sync.WaitGroup
+	// poolClosed is what makes Stop truly idempotent. `stopped` only records
+	// that shutdown was REQUESTED; a Stop whose context expired leaves the pool
+	// open on purpose, and the retry has to be able to tell the difference and
+	// finish the job.
+	poolClosed bool
+	cancel     context.CancelFunc
+	wg         sync.WaitGroup
 }
 
 // New validates the config and opens the load pool. The pool is separate from
@@ -330,6 +351,15 @@ func New(ctx context.Context, cfg Config) (*Generator, error) {
 
 // pickLabel chooses a label with probability proportional to its weight.
 func (g *Generator) pickLabel(rng *rand.Rand) *labelCounter {
+	if len(g.labels) == 0 {
+		return nil
+	}
+	// Belt and braces: validate() already rejects weights that cannot sum into
+	// a positive int, but rand.Intn panics on a non-positive bound and that
+	// panic would happen in a worker goroutine, where nothing can recover it.
+	if g.totalWeight <= 0 {
+		return g.labels[0]
+	}
 	n := rng.Intn(g.totalWeight)
 	for i, cum := range g.cumWeights {
 		if n < cum {
@@ -383,6 +413,9 @@ func (g *Generator) worker(ctx context.Context, rng *rand.Rand) {
 			return
 		}
 		lc := g.pickLabel(rng)
+		if lc == nil {
+			return
+		}
 
 		// Values are deliberately unremarkable: the point is contention on the
 		// table, not an interesting data distribution.
@@ -459,13 +492,20 @@ func (g *Generator) Snapshot() Stats {
 // connections out from under the goroutines using them ("conn busy" panics
 // inside pgx). The wait is what makes the close safe.
 //
-// If ctx expires before the workers finish, Stop gives up waiting and returns —
-// but deliberately leaves the pool OPEN, because closing it under live workers
-// is the exact crash this ordering exists to prevent. A leaked pool is a much
-// cheaper bug than a panic in a demo.
+// If ctx expires before the workers finish, Stop gives up waiting and returns
+// an error — but deliberately leaves the pool OPEN, because closing it under
+// live workers is the exact crash this ordering exists to prevent.
+//
+// That timeout is RECOVERABLE. The workers were still cancelled, so they do
+// wind down on their own; calling Stop again re-checks whether they have
+// exited and closes the pool when they have. Only a Stop that actually got to
+// close the pool is a no-op — otherwise a single unlucky deadline would strand
+// the pool's connections for the life of the process with no way to reclaim
+// them.
 func (g *Generator) Stop(ctx context.Context) error {
 	g.mu.Lock()
-	if g.stopped {
+	if g.poolClosed {
+		// The one true terminal state: nothing left to release.
 		g.mu.Unlock()
 		return nil
 	}
@@ -476,9 +516,11 @@ func (g *Generator) Stop(ctx context.Context) error {
 
 	if !started {
 		// Never started: no workers to wait for, just the pool.
-		g.closePool()
+		g.finishClose()
 		return nil
 	}
+	// Cancelling twice is harmless, and a retry must re-issue it in case the
+	// first Stop raced Start.
 	cancel()
 
 	done := make(chan struct{})
@@ -491,15 +533,32 @@ func (g *Generator) Stop(ctx context.Context) error {
 	case <-done:
 	case <-ctx.Done():
 		g.log.Error("loadgen.stop_timeout", "err", ctx.Err(),
-			"note", "workers still running; pool left open to avoid a busy-conn panic")
+			"note", "workers still running; pool left open to avoid a busy-conn panic. Call Stop again to reclaim it.")
 		return fmt.Errorf("loadgen: stop: workers did not finish: %w", ctx.Err())
 	}
 
-	g.closePool()
+	if !g.finishClose() {
+		// Another Stop got there first.
+		return nil
+	}
 	s := g.Snapshot()
 	g.log.Info("loadgen.stopped",
 		"casualties", s.CasualtiesTotal, "errored", s.ErroredTotal)
 	return nil
+}
+
+// finishClose closes the pool exactly once, reporting whether this call is the
+// one that did it. Only ever reached with the workers provably finished.
+func (g *Generator) finishClose() bool {
+	g.mu.Lock()
+	if g.poolClosed {
+		g.mu.Unlock()
+		return false
+	}
+	g.poolClosed = true
+	g.mu.Unlock()
+	g.closePool()
+	return true
 }
 
 // closePool tolerates a Generator assembled without a pool (unit tests build

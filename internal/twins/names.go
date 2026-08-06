@@ -26,6 +26,11 @@ const maxIdentLen = 63
 // name and the `starts_with(datname, prefix)` orphan sweep.
 var validPrefix = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
 
+// reservedPrefix matches namespaces the orphan sweep must never be pointed at.
+// "pg_" is reserved by Postgres itself, and "template"/"postgres" shadow the
+// databases every cluster is built on — a sweep there would be catastrophic.
+var reservedPrefix = regexp.MustCompile(`^(pg_|template|postgres)`)
+
 // newTwinName builds a unique database name: prefix + UTC timestamp + random
 // suffix. The timestamp makes logs and psql \l readable during a demo; the
 // random suffix is what actually guarantees uniqueness, since two clones can

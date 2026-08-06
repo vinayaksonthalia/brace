@@ -18,12 +18,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"log/slog"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -35,6 +37,21 @@ var ErrNoWarmTwin = errors.New("twins: no warm twin available")
 
 // ErrClosed is returned by every public method after Close.
 var ErrClosed = errors.New("twins: manager is closed")
+
+// ErrNamespaceHeld is returned by NewManager when another live Manager already
+// owns this NamePrefix on the same server. Starting anyway would mean running
+// the startup orphan sweep over databases the other Manager is actively using —
+// split brain, with a live migration destroyed underneath its user.
+var ErrNamespaceHeld = errors.New("twins: NamePrefix namespace is already held by another manager")
+
+// ErrForeignTwin is returned by Release for a name outside this Manager's
+// namespace. Release issues DROP DATABASE, so it must never act on a name it
+// could not have minted.
+var ErrForeignTwin = errors.New("twins: twin is outside this manager's namespace")
+
+// ErrNotCheckedOut is returned by Release for a name inside the namespace that
+// this Manager never handed out (and never dropped).
+var ErrNotCheckedOut = errors.New("twins: twin is not checked out from this manager")
 
 const (
 	defaultPoolSize   = 2
@@ -56,6 +73,19 @@ const (
 	// refillBackoff paces the worker after a failed clone so a permanently
 	// broken template cannot turn into a hot loop of 80-second clones.
 	refillBackoff = 2 * time.Second
+
+	// pendingDropRetry paces the worker's retry of drops that failed inside
+	// Release. The database still exists and is still ours; we keep trying
+	// until it is gone or Close reaps it.
+	pendingDropRetry = 2 * time.Second
+
+	// nameSuffixLen is the fixed number of bytes newTwinName appends to the
+	// prefix: 15 for the timestamp, 1 separator, 8 for the random suffix.
+	nameSuffixLen = 24
+
+	// minPrefixLen keeps the namespace specific enough that it cannot plausibly
+	// shadow an unrelated database. The sweep drops everything matching it.
+	minPrefixLen = 6
 )
 
 // Twin is a live throwaway database. It is owned by the caller between Acquire
@@ -108,9 +138,23 @@ type Manager struct {
 	// and re-sanitizing it on every clone would just be noise.
 	quotedTemplate string
 
-	mu          sync.Mutex
-	warm        []*Twin
-	checkedOut  map[string]*Twin
+	// nsLock is a dedicated, long-lived connection holding a session-level
+	// advisory lock on this NamePrefix for the Manager's whole lifetime. It is
+	// what makes the startup orphan sweep safe: the sweep only ever runs while
+	// this Manager provably owns the namespace.
+	nsLock    *pgx.Conn
+	nsLockKey int64
+
+	mu         sync.Mutex
+	warm       []*Twin
+	checkedOut map[string]*Twin
+	// pendingDrop holds twins whose DROP failed inside Release. They are still
+	// ours: the refill worker retries them and Close reaps whatever is left.
+	pendingDrop map[string]*Twin
+	// released remembers names this Manager has successfully dropped, so a
+	// repeated Release of the same twin is a harmless no-op rather than an
+	// error, while a name we never issued is still rejected.
+	released    map[string]struct{}
 	warming     int
 	closed      bool
 	lastErr     error
@@ -142,6 +186,22 @@ func (c Config) validate() error {
 	}
 	if !validPrefix.MatchString(c.NamePrefix) {
 		return fmt.Errorf("twins: Config.NamePrefix %q must match %s", c.NamePrefix, validPrefix)
+	}
+	// The sweep drops every database matching the prefix, so a prefix that can
+	// shadow a real database name is a data-destruction footgun.
+	if reservedPrefix.MatchString(c.NamePrefix) {
+		return fmt.Errorf("twins: Config.NamePrefix %q is in a reserved namespace (%s)", c.NamePrefix, reservedPrefix)
+	}
+	if len(c.NamePrefix) < minPrefixLen {
+		return fmt.Errorf("twins: Config.NamePrefix %q is only %d bytes; at least %d are required so the "+
+			"orphan sweep cannot match unrelated databases", c.NamePrefix, len(c.NamePrefix), minPrefixLen)
+	}
+	// Every generated name is prefix + nameSuffixLen bytes; a prefix that
+	// cannot fit one would only fail later, at clone time.
+	if len(c.NamePrefix)+nameSuffixLen > maxIdentLen {
+		return fmt.Errorf("twins: Config.NamePrefix %q is %d bytes; generated names would exceed the "+
+			"%d-byte identifier limit (max prefix length is %d)",
+			c.NamePrefix, len(c.NamePrefix), maxIdentLen, maxIdentLen-nameSuffixLen)
 	}
 	if strings.HasPrefix(c.TemplateName, c.NamePrefix) {
 		// Otherwise the orphan sweep would cheerfully drop the template.
@@ -187,14 +247,29 @@ func NewManager(ctx context.Context, cfg Config) (*Manager, error) {
 		adminURL:       cfg.AdminURL,
 		quotedTemplate: quoteIdent(cfg.TemplateName),
 		checkedOut:     make(map[string]*Twin),
+		pendingDrop:    make(map[string]*Twin),
+		released:       make(map[string]struct{}),
 		refill:         make(chan struct{}, 1),
+		nsLockKey:      namespaceLockKey(cfg.NamePrefix),
+	}
+
+	// Claim the namespace BEFORE anything else touches it. sweepOrphans drops
+	// every database matching the prefix on the assumption that a fresh Manager
+	// tracks nothing — an assumption that only holds if no other Manager is
+	// alive on this prefix. The advisory lock is what turns that assumption
+	// into a fact.
+	if err := m.acquireNamespaceLock(ctx); err != nil {
+		pool.Close()
+		return nil, err
 	}
 
 	if err := m.lockTemplate(ctx); err != nil {
+		m.releaseNamespaceLock()
 		pool.Close()
 		return nil, err
 	}
 	if err := m.sweepOrphans(ctx); err != nil {
+		m.releaseNamespaceLock()
 		pool.Close()
 		return nil, err
 	}
@@ -208,6 +283,66 @@ func NewManager(ctx context.Context, cfg Config) (*Manager, error) {
 	m.signalRefill()
 
 	return m, nil
+}
+
+// namespaceLockKey derives the advisory-lock key from the prefix. FNV-1a is
+// used rather than Postgres' hashtext() because it is stable across server
+// versions and collations — the key must mean the same thing to every process
+// that ever runs against this cluster.
+func namespaceLockKey(prefix string) int64 {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(prefix))
+	return int64(h.Sum64())
+}
+
+// acquireNamespaceLock takes a session-level advisory lock on the NamePrefix
+// and keeps the connection that holds it for the Manager's whole lifetime.
+// Session-level (not transaction-level) is the point: the lock must outlive
+// every statement and only fall away when this Manager goes away — including
+// when the process dies, which the server notices as a dropped session.
+func (m *Manager) acquireNamespaceLock(ctx context.Context) error {
+	conn, err := m.pool.Acquire(ctx)
+	if err != nil {
+		return fmt.Errorf("twins: acquire namespace lock connection: %w", err)
+	}
+	var got bool
+	if err := conn.QueryRow(ctx, `SELECT pg_try_advisory_lock($1)`, m.nsLockKey).Scan(&got); err != nil {
+		conn.Release()
+		return fmt.Errorf("twins: claim namespace %q: %w", m.cfg.NamePrefix, err)
+	}
+	if !got {
+		conn.Release()
+		return fmt.Errorf("%w: NamePrefix %q (advisory lock %d) — refusing to start, because the "+
+			"startup orphan sweep would destroy the live twins of the manager that holds it",
+			ErrNamespaceHeld, m.cfg.NamePrefix, m.nsLockKey)
+	}
+	// Hijack rather than hold a checked-out pool connection: a session-level
+	// lock must never be able to travel back into the pool and be handed to an
+	// unrelated query, and closing a hijacked connection ends the session,
+	// which is the server-side guarantee that the lock is gone.
+	m.nsLock = conn.Hijack()
+	m.log.Info("twin.namespace_claimed", "prefix", m.cfg.NamePrefix, "lock_key", m.nsLockKey)
+	return nil
+}
+
+// releaseNamespaceLock hands the namespace back. Idempotent; safe on a Manager
+// that never took the lock.
+func (m *Manager) releaseNamespaceLock() {
+	if m.nsLock == nil {
+		return
+	}
+	conn := m.nsLock
+	m.nsLock = nil
+	ctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
+	defer cancel()
+	if _, err := conn.Exec(ctx, `SELECT pg_advisory_unlock($1)`, m.nsLockKey); err != nil {
+		// Closing the session below drops the lock regardless; this is only
+		// about handing it back promptly.
+		m.log.Warn("twin.namespace_unlock_failed", "prefix", m.cfg.NamePrefix, "err", err)
+	}
+	if err := conn.Close(ctx); err != nil {
+		m.log.Warn("twin.namespace_lock_conn_close_failed", "prefix", m.cfg.NamePrefix, "err", err)
+	}
 }
 
 // lockTemplate asserts the template exists and pins it to ALLOW_CONNECTIONS
@@ -381,17 +516,61 @@ func (m *Manager) signalRefill() {
 // CREATE DATABASE ... TEMPLATE statements never overlap on the same template.
 func (m *Manager) worker(ctx context.Context) {
 	defer m.wg.Done()
+	retry := time.NewTicker(pendingDropRetry)
+	defer retry.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-retry.C:
+			// Paced retry of drops that failed in Release. Nothing to do in the
+			// common case, so this is a no-op tick.
+			m.reapPending(ctx)
 		case <-m.refill:
 			m.fill(ctx)
 		}
 	}
 }
 
+// reapPending re-attempts the DROP for every twin whose Release failed. The
+// database still exists and is still ours, so we keep trying until it is gone
+// or Close takes over.
+func (m *Manager) reapPending(ctx context.Context) {
+	m.mu.Lock()
+	if m.closed || len(m.pendingDrop) == 0 {
+		m.mu.Unlock()
+		return
+	}
+	doomed := make([]*Twin, 0, len(m.pendingDrop))
+	for _, t := range m.pendingDrop {
+		doomed = append(doomed, t)
+	}
+	m.mu.Unlock()
+
+	for _, t := range doomed {
+		if ctx.Err() != nil {
+			return
+		}
+		// A fresh, bounded context: the caller whose Release failed is long
+		// gone, and its context is usually the reason the drop failed.
+		dropCtx, cancel := context.WithTimeout(ctx, cleanupTimeout)
+		err := m.dropDatabase(dropCtx, t.Name)
+		cancel()
+		if err != nil {
+			m.log.Warn("twin.pending_drop_retry_failed", "twin", t.Name, "err", err)
+			continue
+		}
+		m.mu.Lock()
+		delete(m.pendingDrop, t.Name)
+		m.released[t.Name] = struct{}{}
+		m.mu.Unlock()
+		m.log.Info("twin.dropped", "twin", t.Name, "reason", "pending_drop_retry")
+		m.signalRefill()
+	}
+}
+
 func (m *Manager) fill(ctx context.Context) {
+	m.reapPending(ctx)
 	for {
 		if ctx.Err() != nil {
 			return
@@ -422,6 +601,11 @@ func (m *Manager) fill(ctx context.Context) {
 				return
 			}
 			m.warm = append(m.warm, t)
+			// A clone just succeeded, so whatever broke last time is over.
+			// Leaving lastErr set would make a health check report a
+			// permanently broken system after any single transient failure.
+			m.lastErr = nil
+			m.lastErrTime = time.Time{}
 		} else {
 			m.lastErr = err
 			m.lastErrTime = time.Now()
@@ -470,12 +654,14 @@ func (m *Manager) Acquire(ctx context.Context) (*Twin, error) {
 	return t, nil
 }
 
-// Release destroys the twin and triggers a refill. Safe to call for a twin that
-// has already vanished.
+// Release destroys the twin and triggers a refill. Releasing the same twin
+// twice is a harmless no-op; releasing a twin this Manager never issued is an
+// error, because Release issues DROP DATABASE on the name it is handed.
 func (m *Manager) Release(ctx context.Context, t *Twin) error {
 	if t == nil {
 		return errors.New("twins: Release called with nil twin")
 	}
+
 	m.mu.Lock()
 	if m.closed {
 		// Close already owns teardown of everything it snapshotted; dropping
@@ -483,13 +669,54 @@ func (m *Manager) Release(ctx context.Context, t *Twin) error {
 		m.mu.Unlock()
 		return ErrClosed
 	}
-	delete(m.checkedOut, t.Name)
+	// Ownership, checked BEFORE any DDL is built. The *Twin is caller-supplied
+	// and its Name goes straight into a DROP DATABASE, so a name we could not
+	// have minted must never get that far.
+	if !strings.HasPrefix(t.Name, m.cfg.NamePrefix) {
+		m.mu.Unlock()
+		return fmt.Errorf("%w: %q does not start with NamePrefix %q", ErrForeignTwin, t.Name, m.cfg.NamePrefix)
+	}
+	tracked, isCheckedOut := m.checkedOut[t.Name]
+	if !isCheckedOut {
+		if pending, ok := m.pendingDrop[t.Name]; ok {
+			// A previous Release failed its DROP. Retrying is welcome.
+			tracked = pending
+		} else if _, done := m.released[t.Name]; done {
+			// Already destroyed by this Manager. Nothing left to do.
+			m.mu.Unlock()
+			return nil
+		} else {
+			m.mu.Unlock()
+			return fmt.Errorf("%w: %q", ErrNotCheckedOut, t.Name)
+		}
+	}
+	if tracked == nil {
+		tracked = t
+	}
 	m.mu.Unlock()
 
 	start := time.Now()
 	if err := m.dropDatabase(ctx, t.Name); err != nil {
+		// The database still exists. Give up the checked-out slot but keep the
+		// twin tracked, or it survives Close as an untracked orphan.
+		m.mu.Lock()
+		if !m.closed {
+			delete(m.checkedOut, t.Name)
+			m.pendingDrop[t.Name] = tracked
+		}
+		m.mu.Unlock()
+		m.log.Warn("twin.release_drop_failed", "twin", t.Name, "err", err,
+			"note", "twin kept tracked for retry; it will be reaped by the worker or by Close")
+		m.signalRefill()
 		return err
 	}
+
+	m.mu.Lock()
+	delete(m.checkedOut, t.Name)
+	delete(m.pendingDrop, t.Name)
+	m.released[t.Name] = struct{}{}
+	m.mu.Unlock()
+
 	m.log.Info("twin.dropped", "twin", t.Name,
 		"lifetime_ms", time.Since(t.CreatedAt).Milliseconds(),
 		"duration_ms", time.Since(start).Milliseconds())
@@ -542,13 +769,22 @@ func (m *Manager) Close(ctx context.Context) error {
 	m.wg.Wait()
 
 	m.mu.Lock()
-	doomed := make([]*Twin, 0, len(m.warm)+len(m.checkedOut))
+	doomed := make([]*Twin, 0, len(m.warm)+len(m.checkedOut)+len(m.pendingDrop))
 	doomed = append(doomed, m.warm...)
 	for _, t := range m.checkedOut {
 		doomed = append(doomed, t)
 	}
+	// Twins whose Release failed are still ours to destroy; this is the last
+	// chance anyone gets to do it.
+	for name, t := range m.pendingDrop {
+		if _, dup := m.checkedOut[name]; dup {
+			continue
+		}
+		doomed = append(doomed, t)
+	}
 	m.warm = nil
 	m.checkedOut = make(map[string]*Twin)
+	m.pendingDrop = make(map[string]*Twin)
 	m.mu.Unlock()
 
 	var errs []error
@@ -559,6 +795,9 @@ func (m *Manager) Close(ctx context.Context) error {
 		}
 		m.log.Info("twin.dropped", "twin", t.Name, "reason", "close")
 	}
+	// Hand the namespace back only once every database in it is gone, so the
+	// next Manager's sweep cannot race this one's teardown.
+	m.releaseNamespaceLock()
 	m.pool.Close()
 	m.log.Info("twin.manager_closed", "dropped", len(doomed), "errors", len(errs))
 	return errors.Join(errs...)

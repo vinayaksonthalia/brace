@@ -475,6 +475,115 @@ func TestCloseLeavesNothingBehind(t *testing.T) {
 	}
 }
 
+// TestSecondManagerOnSameNamespaceIsRefused is the split-brain guard. A second
+// Manager configured with the same NamePrefix used to boot happily and run its
+// startup orphan sweep over the FIRST Manager's live twins — including one
+// already handed to a caller, i.e. a migration destroyed underneath its user.
+// The namespace advisory lock makes that impossible: the second Manager refuses
+// to start, and nothing in the namespace is touched.
+func TestSecondManagerOnSameNamespaceIsRefused(t *testing.T) {
+	requireDB(t)
+	admin := adminConnect(t)
+	ctx := context.Background()
+
+	const splitPrefix = itPrefix + "split_"
+	newSplit := func() (*Manager, error) {
+		c, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		return NewManager(c, Config{
+			AdminURL:     adminURL,
+			TemplateName: itTemplate,
+			PoolSize:     2,
+			NamePrefix:   splitPrefix,
+			Logger:       testLogger(t),
+		})
+	}
+
+	a, err := newSplit()
+	if err != nil {
+		t.Fatalf("first NewManager: %v", err)
+	}
+	defer a.Close(context.Background())
+	waitForWarm(t, a, 2, 60*time.Second)
+
+	held, err := a.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	before := a.Status()
+
+	b, err := newSplit()
+	if err == nil {
+		_ = b.Close(context.Background())
+		t.Fatal("a second Manager booted on a namespace another Manager already holds")
+	}
+	if !errors.Is(err, ErrNamespaceHeld) {
+		t.Fatalf("second NewManager error = %v, want ErrNamespaceHeld", err)
+	}
+
+	// Nothing of A's may have been swept.
+	if !databaseExists(t, admin, held.Name) {
+		t.Errorf("the checked-out twin %q was destroyed by the second Manager's startup", held.Name)
+	}
+	for _, n := range before.WarmNames {
+		if !databaseExists(t, admin, n) {
+			t.Errorf("warm twin %q was destroyed by the second Manager's startup", n)
+		}
+	}
+
+	// And the namespace is reusable once A really is gone.
+	if err := a.Release(ctx, held); err != nil {
+		t.Errorf("Release: %v", err)
+	}
+	if err := a.Close(ctx); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	c, err := newSplit()
+	if err != nil {
+		t.Fatalf("NewManager after the holder closed: %v", err)
+	}
+	if err := c.Close(ctx); err != nil {
+		t.Errorf("Close: %v", err)
+	}
+}
+
+// TestReleaseRefusesForeignAndUnknownTwins pins the ownership check that stands
+// between a caller-supplied *Twin and a DROP DATABASE.
+func TestReleaseRefusesForeignAndUnknownTwins(t *testing.T) {
+	requireDB(t)
+	admin := adminConnect(t)
+	ctx := context.Background()
+
+	const bystander = "brace_it_bystander"
+	if _, err := admin.Exec(ctx, `DROP DATABASE IF EXISTS `+quoteIdent(bystander)+` WITH (FORCE)`); err != nil {
+		t.Fatalf("pre-drop: %v", err)
+	}
+	if _, err := admin.Exec(ctx, `CREATE DATABASE `+quoteIdent(bystander)); err != nil {
+		t.Fatalf("create bystander: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = admin.Exec(context.Background(), `DROP DATABASE IF EXISTS `+quoteIdent(bystander)+` WITH (FORCE)`)
+	})
+
+	m := newIntegrationManager(t, 1)
+	defer m.Close(context.Background())
+	waitForWarm(t, m, 1, 60*time.Second)
+
+	// Outside the namespace entirely: refused before any DDL is issued.
+	err := m.Release(ctx, &Twin{Name: bystander})
+	if !errors.Is(err, ErrForeignTwin) {
+		t.Errorf("Release(foreign) = %v, want ErrForeignTwin", err)
+	}
+	if !databaseExists(t, admin, bystander) {
+		t.Fatalf("Release destroyed %q, a database this Manager never created", bystander)
+	}
+
+	// Inside the namespace but never issued by this Manager: still refused.
+	if err := m.Release(ctx, &Twin{Name: itPrefix + "never_issued"}); !errors.Is(err, ErrNotCheckedOut) {
+		t.Errorf("Release(unknown) = %v, want ErrNotCheckedOut", err)
+	}
+}
+
 // TestStartupRejectsMissingTemplate and friends: startup must fail fast and
 // loudly rather than run a lab with no template.
 func TestStartupValidation(t *testing.T) {
