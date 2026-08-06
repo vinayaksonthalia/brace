@@ -85,19 +85,28 @@ func (e *NoWarmTwinError) Error() string {
 func (e *NoWarmTwinError) Unwrap() error { return twins.ErrNoWarmTwin }
 
 const (
-	defaultSettle        = 2 * time.Second
-	defaultRecovery      = 1500 * time.Millisecond
-	defaultSampleEvery   = 250 * time.Millisecond
-	defaultWorkers       = 24
-	defaultLockTimeout   = 1500 * time.Millisecond
-	defaultCloneETA      = 45 * time.Second
-	teardownTimeout      = 30 * time.Second
-	ledgerInsertTimeout  = 10 * time.Second
-	invalidIndexTimeout  = 10 * time.Second
-	grantTimeout         = 15 * time.Second
-	migratorConnTimeout  = 15 * time.Second
-	defaultHistoryLimit  = 20
-	maxLedgerErrorLength = 4000
+	defaultSettle      = 2 * time.Second
+	defaultRecovery    = 1500 * time.Millisecond
+	defaultSampleEvery = 250 * time.Millisecond
+	defaultWorkers     = 24
+	defaultLockTimeout = 1500 * time.Millisecond
+	defaultCloneETA    = 45 * time.Second
+	// defaultMaxRunDuration bounds the ENTIRE measured window of one rehearsal —
+	// grants, load, baseline, the migration itself, and the recovery observation
+	// — everything after a warm twin is in hand. It exists because the migration
+	// connection runs with statement_timeout=0 (so a real DDL is never
+	// self-killed) and only one run may be in flight at a time: without this
+	// guard, a single migration that queues forever behind live traffic or an
+	// idle-in-transaction session would wedge the one run slot and freeze the
+	// whole public lab until the process is restarted.
+	defaultMaxRunDuration = 90 * time.Second
+	teardownTimeout       = 30 * time.Second
+	ledgerInsertTimeout   = 10 * time.Second
+	invalidIndexTimeout   = 10 * time.Second
+	grantTimeout          = 15 * time.Second
+	migratorConnTimeout   = 15 * time.Second
+	defaultHistoryLimit   = 20
+	maxLedgerErrorLength  = 4000
 )
 
 // Config configures an Engine.
@@ -128,6 +137,12 @@ type Config struct {
 	// CloneETA is how long a twin clone takes on this deployment; it is only
 	// used to give a 503 an honest-ish "come back in N seconds". Defaults to 45s.
 	CloneETA time.Duration
+	// MaxRunDuration bounds the whole measured rehearsal (everything after the
+	// twin is acquired, up to and including the recovery observation). A run that
+	// exceeds it is aborted — the migration is cancelled, load is stopped, the
+	// twin is reaped, and the result comes back with verdict INCONCLUSIVE rather
+	// than hanging the single run slot forever. Defaults to 90s.
+	MaxRunDuration time.Duration
 	// Logger defaults to slog.Default().
 	Logger *slog.Logger
 }
@@ -153,6 +168,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.CloneETA <= 0 {
 		c.CloneETA = defaultCloneETA
+	}
+	if c.MaxRunDuration <= 0 {
+		c.MaxRunDuration = defaultMaxRunDuration
 	}
 	if c.Logger == nil {
 		c.Logger = slog.Default()
@@ -507,9 +525,21 @@ func (e *Engine) runOn(ctx context.Context, twin *twins.Twin, as *Assessment, mo
 		LockModes:      []string{},
 	}
 
+	// The max-duration guard. Everything measured from here on runs under runCtx,
+	// which fires after MaxRunDuration no matter what the migration is doing. When
+	// it fires while the caller's own context is still alive, that is the guard —
+	// not an abandoned request — and the run is reported INCONCLUSIVE rather than
+	// left to wedge the single run slot forever. Teardown paths below deliberately
+	// use context.WithoutCancel(ctx) so a fired guard cannot also prevent cleanup.
+	runCtx, cancelRun := context.WithTimeout(ctx, e.cfg.MaxRunDuration)
+	defer cancelRun()
+	guardFired := func() bool {
+		return ctx.Err() == nil && errors.Is(runCtx.Err(), context.DeadlineExceeded)
+	}
+
 	// 3. Twin-local privileges for the unprivileged migrator role.
 	e.setPhase(phaseGranting)
-	grantCtx, cancelGrant := context.WithTimeout(ctx, grantTimeout)
+	grantCtx, cancelGrant := context.WithTimeout(runCtx, grantTimeout)
 	err := grantOnTwin(grantCtx, twin.DSN, twin.Name, e.cfg.MigratorRole)
 	cancelGrant()
 	if err != nil {
@@ -518,7 +548,7 @@ func (e *Engine) runOn(ctx context.Context, twin *twins.Twin, as *Assessment, mo
 
 	// 4. Live traffic.
 	e.setPhase(phaseWarming)
-	gen, err := loadgen.New(ctx, loadgen.Config{
+	gen, err := loadgen.New(runCtx, loadgen.Config{
 		DSN:         twin.DSN,
 		Workers:     e.cfg.Workers,
 		LockTimeout: e.cfg.LockTimeout,
@@ -541,7 +571,7 @@ func (e *Engine) runOn(ctx context.Context, twin *twins.Twin, as *Assessment, mo
 	}
 	defer stopLoad()
 
-	if err := gen.Start(ctx); err != nil {
+	if err := gen.Start(runCtx); err != nil {
 		return nil, fmt.Errorf("engine: start load generator: %w", err)
 	}
 
@@ -559,8 +589,15 @@ func (e *Engine) runOn(ctx context.Context, twin *twins.Twin, as *Assessment, mo
 	// Let the pool warm and the rate stabilise before believing any number.
 	e.setPhase(phaseBaseline)
 	baselineFrom := time.Now()
-	if !sleepCtx(ctx, e.cfg.SettleDuration) {
-		return nil, ctx.Err()
+	if !sleepCtx(runCtx, e.cfg.SettleDuration) {
+		// The guard cannot realistically fire this early (the settle is a couple
+		// of seconds and the budget is tens), but if MaxRunDuration was set
+		// absurdly low we still refuse to return a nil error the caller cannot
+		// interpret. A caller cancel returns its own error.
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		return nil, runCtx.Err()
 	}
 	baselineTo := time.Now()
 	baseline := smp.rateBetween(baselineFrom, baselineTo)
@@ -585,12 +622,12 @@ func (e *Engine) runOn(ctx context.Context, twin *twins.Twin, as *Assessment, mo
 		Interval: e.cfg.SampleInterval,
 		Logger:   e.cfg.Logger,
 	})
-	if err := mon.Start(ctx); err != nil {
+	if err := mon.Start(runCtx); err != nil {
 		// Corroboration is optional. The run continues without it.
 		e.log.Warn("engine.monitor_unavailable", "run", state.RunID, "err", err)
 	}
 
-	migCtx, cancelMig := context.WithTimeout(ctx, migratorConnTimeout)
+	migCtx, cancelMig := context.WithTimeout(runCtx, migratorConnTimeout)
 	migConn, err := connectAsMigrator(migCtx, twin.DSN, e.cfg.MigratorRole, e.migratorPassword)
 	cancelMig()
 	if err != nil {
@@ -610,19 +647,30 @@ func (e *Engine) runOn(ctx context.Context, twin *twins.Twin, as *Assessment, mo
 	// INDEX CONCURRENTLY, REINDEX CONCURRENTLY and VACUUM all refuse to run
 	// inside one, and wrapping the statement would silently change what is
 	// being measured for everything else.
-	_, ddlErr := migConn.Exec(ctx, as.SQL)
+	//
+	// runCtx bounds this Exec. If the DDL cannot acquire its lock inside the run
+	// budget, runCtx fires; pgx then sends a cancel request to the server (the
+	// programmatic equivalent of pg_cancel_backend against the migration's own
+	// backend) and Exec returns. That is what stops one hung migration from
+	// pinning the single run slot forever.
+	_, ddlErr := migConn.Exec(runCtx, as.SQL)
 	t1 := time.Now()
 	res.DDLEndT = smp.since(t1)
 	res.DurationSeconds = roundSeconds(t1.Sub(t0).Seconds())
+	guarded := ddlErr != nil && guardFired()
 	if ddlErr != nil {
 		res.Error = truncate(ddlErr.Error(), maxLedgerErrorLength)
-		e.log.Warn("engine.migration_failed", "run", state.RunID, "err", ddlErr)
+		e.log.Warn("engine.migration_failed", "run", state.RunID, "err", ddlErr, "guard_fired", guarded)
 	}
 
-	// 7. Keep the load running so recovery is visible on the trace.
-	e.setPhase(phaseRecovery)
-	if !sleepCtx(ctx, e.cfg.RecoveryDuration) && ctx.Err() != nil {
-		e.log.Warn("engine.recovery_cut_short", "run", state.RunID, "err", ctx.Err())
+	// 7. Keep the load running so recovery is visible on the trace — but not when
+	// the guard already fired: the budget is spent, and the only thing left to do
+	// is report what we have and reap the twin.
+	if !guarded {
+		e.setPhase(phaseRecovery)
+		if !sleepCtx(runCtx, e.cfg.RecoveryDuration) && ctx.Err() != nil {
+			e.log.Warn("engine.recovery_cut_short", "run", state.RunID, "err", ctx.Err())
+		}
 	}
 
 	e.setPhase(phaseReporting)
@@ -649,6 +697,17 @@ func (e *Engine) runOn(ctx context.Context, twin *twins.Twin, as *Assessment, mo
 	res.Timeline = smp.points()
 	res.BlockedSeconds = blockedSecondsFrom(res.Timeline, res.DDLStartT, baseline)
 	res.Verdict = verdictFor(res.BlockedSeconds)
+	if guarded {
+		// The guard fired: the migration never finished inside the budget, so the
+		// blocked-seconds number is only "how long it had frozen traffic SO FAR",
+		// not a completed measurement. Report the distinct terminal state and
+		// replace the raw context-deadline string with a message that says what
+		// actually happened and why it matters.
+		res.Verdict = VerdictInconclusive
+		res.Error = fmt.Sprintf("migration exceeded %ds — could not acquire its lock while traffic ran; "+
+			"in production this is itself a red flag: the change cannot complete under load",
+			int(e.cfg.MaxRunDuration.Seconds()+0.5))
+	}
 	res.MonitorBlockedSeconds = monReport.BlockedSeconds
 	res.Monitor = monReport
 	if len(monReport.LockModes) > 0 {
@@ -695,11 +754,20 @@ func casualtiesFrom(s loadgen.Stats) Casualties {
 // measurement disagrees with the prediction.
 func noteFor(res *RunResult, as *Assessment, mon monitor.Report) string {
 	switch {
-	case res.Error != "":
-		return "The migration itself failed, so the freeze measurement covers only the time before it gave up."
+	case res.Verdict == VerdictInconclusive:
+		return "Brace stopped the run at its time limit: the migration never acquired its lock while traffic " +
+			"ran, so it could not complete under load. That is not a Brace failure — it is the finding. A change " +
+			"that cannot finish behind live writes here will not finish behind them in production either; look for " +
+			"a long-running query or an idle-in-transaction session holding the table, or rewrite it to take a " +
+			"weaker lock (CONCURRENTLY, or the NOT VALID two-step)."
 	case len(res.InvalidIndexes) > 0:
+		// Checked BEFORE the generic error branch: a cancelled or failed
+		// CONCURRENTLY build usually ALSO sets res.Error, but the actionable
+		// signal is the INVALID leftover it left behind, not merely "it failed".
 		return "A CONCURRENTLY build left an INVALID index behind. It costs write overhead but will never be used " +
 			"by a query — drop it and retry."
+	case res.Error != "":
+		return "The migration itself failed, so the freeze measurement covers only the time before it gave up."
 	case res.BaselineWPS == 0:
 		return "No baseline traffic was measured, so the freeze window could not be computed from the write rate. " +
 			"Treat the monitor's figures as the only evidence for this run."

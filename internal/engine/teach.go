@@ -148,8 +148,10 @@ var lessons = map[Classification]Lesson{
 		BlocksWrites: true,
 		Explanation: "The PostgreSQL 11 fast path only applies to a default that is constant. A volatile default — " +
 			"now(), random(), gen_random_uuid(), nextval() — has to produce a different value per row, so the whole " +
-			"table is rewritten under ACCESS EXCLUSIVE, blocking reads and writes for the duration. Add the column " +
-			"without a default, backfill in batches, then set the default for future rows.",
+			"table is rewritten under ACCESS EXCLUSIVE, blocking reads and writes for the duration. The same is true " +
+			"of a SERIAL / BIGSERIAL column (which is just a nextval() default), a GENERATED ... AS IDENTITY column, " +
+			"and a GENERATED ALWAYS AS (expr) STORED column: each computes a value for every existing row. Add the " +
+			"column without a default, backfill in batches, then set the default for future rows.",
 		Suggestion: "ALTER TABLE t ADD COLUMN c <type>;  -- backfill in batches, then ALTER COLUMN c SET DEFAULT ...",
 	},
 	ClassAddConstraint: {

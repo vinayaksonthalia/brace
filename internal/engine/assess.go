@@ -45,6 +45,22 @@ var volatileDefault = regexp.MustCompile(
 // addition into a blocking one.
 var indexBearingColumnOption = regexp.MustCompile(`\b(UNIQUE|PRIMARY KEY|REFERENCES)\b`)
 
+// rewritingColumnDef matches ADD COLUMN forms that force a full table rewrite
+// under ACCESS EXCLUSIVE even though they carry no literal DEFAULT keyword, so
+// the PostgreSQL 11 "constant default is metadata-only" fast path does NOT
+// apply to them:
+//
+//   - SERIAL / BIGSERIAL / SMALLSERIAL expand to a volatile nextval() default,
+//     so every existing row has to be filled in.
+//   - GENERATED ... AS IDENTITY is the same story with the modern spelling.
+//   - GENERATED ALWAYS AS (expr) STORED computes a value per row.
+//
+// Miss any of these and Brace would tell a user "there is nothing here to
+// crash" about a statement that freezes the table for the length of a rewrite —
+// a false-"safe" on a dangerous migration, which is the one error this product
+// cannot make.
+var rewritingColumnDef = regexp.MustCompile(`\b(SERIAL|BIGSERIAL|SMALLSERIAL|GENERATED)\b`)
+
 // RejectKind classifies a refusal for the UI.
 type RejectKind string
 
@@ -232,7 +248,9 @@ func classifyAlterTable(flat string) Classification {
 		if indexBearingColumnOption.MatchString(flat) {
 			return ClassAddConstraint
 		}
-		if volatileDefault.MatchString(flat) {
+		// A volatile DEFAULT, or a SERIAL/IDENTITY/GENERATED-STORED column, forces
+		// a full table rewrite — the PG11 fast path is only for a CONSTANT default.
+		if volatileDefault.MatchString(flat) || rewritingColumnDef.MatchString(flat) {
 			return ClassAddColumnVolatile
 		}
 		// Constant default, or no default: metadata-only since PG11.

@@ -23,9 +23,15 @@ const (
 	// pager all notice.
 	unsafeThresholdSeconds = 1.0
 
-	// VerdictSafe / VerdictUnsafe are the two possible verdicts.
+	// VerdictSafe / VerdictUnsafe are the two measured verdicts.
 	VerdictSafe   = "SAFE"
 	VerdictUnsafe = "UNSAFE"
+	// VerdictInconclusive is the terminal state for a run the max-duration guard
+	// had to abort: the migration could not complete its work (typically because
+	// it never acquired its lock) inside the run budget. It is NOT a measurement
+	// of "safe" or "unsafe" — it is the finding that the change cannot finish
+	// under live traffic, which in production is itself a red flag.
+	VerdictInconclusive = "INCONCLUSIVE"
 )
 
 // RatePoint is one sample of the run's timeline. The API replays these to draw
