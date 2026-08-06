@@ -235,10 +235,18 @@
       pts.sort(function (a, b) { return a.t - b.t; });
     }
 
+    // A soft-limit ceiling. An axis that re-fits itself to the window's
+    // peak every frame makes a steady trace look like it is breathing —
+    // the reading changes when the data has not. So the ceiling is pinned
+    // to the baseline, and only lifts if traffic genuinely overshoots it.
+    var ceiling = 0;
     function scaleY() {
-      var peak = baseline || 1;
+      var peak = 0;
       for (var i = 0; i < pts.length; i++) peak = Math.max(peak, pts[i].v);
-      return peak * 1.22;
+      var want = Math.max((baseline || peak || 1) * 1.35, peak * 1.08);
+      // ratchet up immediately, ease down slowly, never chatter
+      ceiling = ceiling ? (want > ceiling ? want : ceiling + (want - ceiling) * 0.02) : want;
+      return ceiling;
     }
 
     function draw() {
@@ -469,15 +477,25 @@
   var currentRun = null;
   var seeded = false;
 
+  /* One place decides how every control and label reads in each state,
+     so the arc can never half-apply itself. */
+  var STATES = {
+    idle:    { run: 'Run the crash test', hint: 'Ctrl↵ to run',            chamber: 'chamber nominal' },
+    running: { run: 'Crash in progress',  hint: 'the twin is under load',  chamber: 'rig armed' },
+    crash:   { run: 'Crash in progress',  hint: 'writes are frozen',       chamber: 'writes frozen' }
+  };
+
   function setState(s) {
     state = s;
     el.root.dataset.state = s;
     var busy = (s === 'running' || s === 'crash');
+    var copy = STATES[s] || STATES.idle;
     el.runBtn.disabled = busy;
     el.sql.disabled = busy;
     el.presets.forEach(function (b) { b.disabled = busy; });
-    el.runText.textContent = busy ? 'Crash in progress' : 'Run the crash test';
-    el.runHint.textContent = busy ? 'the twin is under load' : 'Ctrl↵ to run';
+    el.runText.textContent = copy.run;
+    el.runHint.textContent = copy.hint;
+    el.chamberState.textContent = copy.chamber;
   }
 
   /* ── the big number eases toward each 1 Hz sample ───────── */
@@ -516,7 +534,7 @@
       chamber.classList.remove('is-impact');
       void chamber.offsetWidth;                  // restart the keyframes
       chamber.classList.add('is-impact');
-      setTimeout(function () { chamber.classList.remove('is-impact'); }, 500);
+      setTimeout(function () { chamber.classList.remove('is-impact'); }, 620);
     }
     freezeStartedAt = Date.now();
     clearInterval(freezeTimer);
@@ -549,7 +567,6 @@
     setState('idle');
     el.twin.dataset.live = '0';
     el.twin.textContent = (ev.twin || el.twin.textContent) + ' · discarded';
-    el.chamberState.textContent = 'chamber nominal';
     el.reportNote.textContent = 'run ' + (ev.run_id || '') + ' · complete';
     renderReport(ev);
     refreshStatus();
@@ -569,12 +586,35 @@
 
   function runningCard(ev) {
     var n = document.createElement('div');
-    n.className = 'empty';
-    n.innerHTML = '<p></p>';
+    n.className = 'working';
+    n.innerHTML = '<span class="working__tag"></span><p></p>';
+    n.querySelector('.working__tag').textContent = ev.mode === 'safe'
+      ? 'building without the lock' : 'migration on the rig';
     n.querySelector('p').textContent = ev.mode === 'safe'
-      ? 'Building the index without the lock. Watch the line — a safe migration never dips.'
-      : 'The migration is on the rig. Watch the line.';
+      ? 'Watch the line. A safe migration never dips, and this card fills in when the build finishes.'
+      : 'Watch the line. The moment it takes a blocking lock, writes stop and the timer starts.';
     return n;
+  }
+
+  /* A failed CREATE INDEX CONCURRENTLY leaves an INVALID index in the
+     schema. Nothing measures it and nothing cleans it up for you, so
+     the card says so plainly and hands you the statement to run. */
+  function renderWreckage(card, ev) {
+    var wrap = slot(card, 'wreckWrap');
+    if (!wrap) return;
+    var idx = ev.invalid_indexes;
+    if (!idx || !idx.length) return;
+    var names = idx.map(function (i) {
+      return '<code>' + String(typeof i === 'string' ? i : (i && i.name) || i).replace(/[<>&]/g, '') + '</code>';
+    });
+    wrap.hidden = false;
+    var one = names.length === 1;
+    slot(card, 'wreckText').innerHTML = one
+      ? 'The build did not finish, so ' + names[0] + ' is still in the schema and marked INVALID. ' +
+        'Postgres will not use it, and the next build will not replace it. Drop it, then run the migration again.'
+      : 'The build did not finish, so ' + names.length + ' indexes are still in the schema and marked INVALID: ' +
+        names.join(' ') + '. Postgres will not use them, and the next build will not replace them. ' +
+        'Drop each one, then run the migration again.';
   }
 
   var LABEL_NAMES = { checkout: 'checkouts', login: 'logins', add_to_cart: 'cart adds' };
@@ -630,6 +670,8 @@
         f.hidden = open;
       });
     }
+
+    renderWreckage(card, ev);
 
     slot(card, 'duration').textContent = ev.duration_seconds != null
       ? 'migration ran ' + secs(ev.duration_seconds) + ' · twin discarded'
@@ -719,14 +761,14 @@
     if (state === 'running' || state === 'crash') return;
     var sql = el.sql.value;
     el.reportNote.textContent = 'dispatching';
-    el.chamberState.textContent = 'loading the rig';
+    el.chamberState.textContent = 'loading the rig';   // pre-accept; setState takes over on run_started
 
     api.run(sql).then(function (res) {
       // run_started arrives on the stream; this only confirms acceptance.
       el.reportNote.textContent = 'run ' + (res.run_id || '') + ' accepted';
     }).catch(function (err) {
       var body = (err && err.body) || {};
-      el.chamberState.textContent = 'chamber nominal';
+      setState('idle');
       if (err.status === 400) showRejected(body);
       else if (err.status === 409) { showSimple('tpl-busy'); el.reportNote.textContent = 'rig busy'; }
       else if (err.status === 503) showPreparing(body.eta_seconds);

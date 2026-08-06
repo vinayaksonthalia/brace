@@ -1,12 +1,16 @@
 /* ═══════════════════════════════════════════════════════════════
    BRACE — landing.
-   Same instrument-panel language as the lab, one register calmer:
-   mono micro-labels carry structure, prose carries the argument.
-   Brand is monochrome. Green and red are reserved for the pulse,
-   where they mean something.
+
+   Same facility as the lab, one register calmer. Mono is the
+   instrument (labels, plates, tick rails, the one hero line);
+   sans carries every sentence and every heading, so the hero's
+   mono display is the only one on the page and stays memorable.
+
+   Brand is monochrome. Amber annotates. Green and red belong to
+   the pulse, where they mean something.
    ═══════════════════════════════════════════════════════════════ */
 
-.landing{ --measure: 1080px; }
+.landing{ --measure:1120px; --prose:62ch; }
 .landing main{ width:100%; }
 
 .landing .rail{ position:sticky; top:0; z-index:20; }
@@ -18,48 +22,65 @@
 
 /* ── reveal ───────────────────────────────────────────────── */
 .reveal{
-  opacity:0; transform:translateY(16px);
-  transition:opacity 560ms var(--ease), transform 560ms var(--ease);
+  opacity:0; transform:translateY(var(--rise,14px));
+  transition:opacity var(--t-beat) var(--ease), transform var(--t-beat) var(--ease);
   transition-delay:calc(var(--i, 0) * 70ms);
 }
 .reveal.in{ opacity:1; transform:none; }
 @media (prefers-reduced-motion:reduce){ .reveal{ opacity:1; transform:none; } }
 
-/* ── HERO ─────────────────────────────────────────────────── */
-.hero{ padding:clamp(56px,11vw,120px) var(--gut) 0; }
-.hero__inner{ max-width:var(--measure); margin:0 auto; text-align:center; }
-
-.hero__mark{ width:clamp(88px,15vw,132px); height:auto; }
-.mark__sig{ stroke:var(--ink); }
-.mark__tick{ stroke:var(--ink); opacity:.5; }
-
-.hero__word{
-  margin:14px 0 0; font-size:13px; letter-spacing:.62em; text-indent:.62em;
-  color:var(--ink-2); text-transform:lowercase;
+/* ═══ HERO ══════════════════════════════════════════════════════
+   Left: the claim. Right: the calibration disc at a size where you
+   can actually read what it is — a target with the signal running
+   through it, silent at impact centre. That is the whole product
+   in one glyph, so it gets the room. */
+.hero{ padding:clamp(40px,7vw,88px) var(--gut) 0; }
+.hero__inner{
+  max-width:var(--measure); margin:0 auto;
+  display:grid; gap:var(--s7);
+  grid-template-columns:minmax(0,1.2fr) minmax(0,.8fr);
+  align-items:center;
 }
+
+/* the spec plate — an engineering report header, not a badge */
+.plate{
+  display:flex; flex-wrap:wrap; align-items:center; gap:0;
+  margin:0 0 var(--s5); padding:0;
+  font-size:var(--t-micro); letter-spacing:.13em; text-transform:uppercase;
+  color:var(--ink-2);
+  border-top:1px solid var(--edge); border-bottom:1px solid var(--edge);
+  padding:var(--s2) 0;
+}
+.plate i{
+  font-style:normal; color:var(--ink-3); letter-spacing:var(--track-label);
+  margin-right:var(--s2);
+}
+.plate i + i,
+.plate i:not(:first-child){ margin-left:var(--s4); padding-left:var(--s4); border-left:1px solid var(--edge); }
+
 .hero__pitch{
-  margin:26px auto 0; max-width:19ch;
+  margin:0; max-width:23ch;
   font-family:var(--mono);
-  font-size:clamp(32px,6.2vw,62px); line-height:1.04; font-weight:700;
-  letter-spacing:-.035em; color:var(--ink);
+  font-size:var(--t-display); line-height:1.03; font-weight:700;
+  letter-spacing:var(--track-display); color:var(--ink);
 }
 .hero__sub{
-  margin:20px auto 0; max-width:56ch;
-  font-family:var(--sans); font-size:clamp(15px,1.9vw,18px); line-height:1.6; color:var(--ink-2);
+  margin:var(--s5) 0 0; max-width:52ch;
+  font-family:var(--sans); font-size:clamp(15px,1.8vw,18px); line-height:1.6; color:var(--ink-2);
 }
 
-.hero__cta{ display:flex; gap:12px; justify-content:center; flex-wrap:wrap; margin-top:32px; }
+.hero__cta{ display:flex; gap:var(--s3); flex-wrap:wrap; margin-top:var(--s6); }
 .btn{
-  display:inline-flex; align-items:center; gap:9px; text-decoration:none;
-  font-family:var(--mono); font-size:12px; letter-spacing:.2em; text-transform:uppercase; font-weight:600;
+  display:inline-flex; align-items:center; gap:var(--s2); text-decoration:none;
+  font-family:var(--mono); font-size:12px; letter-spacing:var(--track-label); text-transform:uppercase; font-weight:600;
   padding:14px 24px; border-radius:var(--r); border:1px solid transparent;
   transition:background var(--t-mid) var(--ease), color var(--t-mid) var(--ease),
     border-color var(--t-mid) var(--ease), transform var(--t-mid) var(--ease),
     box-shadow var(--t-mid) var(--ease);
 }
 .btn span{ transition:transform var(--t-mid) var(--ease); }
-.btn--primary{ background:var(--ink); color:var(--floor); }
-.btn--primary:hover{ background:var(--btn-hover); transform:translateY(-2px); box-shadow:0 14px 30px -18px var(--ink); }
+.btn--primary{ background:var(--ink); color:var(--floor); box-shadow:var(--e1); }
+.btn--primary:hover{ background:var(--btn-hover); transform:translateY(-2px); box-shadow:var(--e2); }
 .btn--primary:hover span{ transform:translateX(4px); }
 .btn--ghost{ border-color:var(--edge-hot); color:var(--ink-2); }
 .btn--ghost:hover{ border-color:var(--ink-2); color:var(--ink); transform:translateY(-2px); }
@@ -67,143 +88,311 @@
 .btn--lg{ padding:17px 30px; font-size:13px; }
 
 .hero__nofriction{
-  margin:18px 0 0; font-size:10px; letter-spacing:.18em; text-transform:uppercase; color:var(--ink-3);
+  margin:var(--s5) 0 0; font-size:var(--t-micro); letter-spacing:.16em; text-transform:uppercase; color:var(--ink-3);
 }
 
-/* ── TEASER (the brand gesture) ───────────────────────────── */
+/* the disc, annotated like a lab photograph */
+.hero__disc{ display:flex; flex-direction:column; align-items:center; gap:var(--s4); }
+.hero__mark{ width:min(100%,268px); height:auto; overflow:visible; }
+.mark__tick{ stroke:var(--amber); opacity:.9; }
+.hero__disc-note{
+  font-size:9px; letter-spacing:.24em; text-transform:uppercase; color:var(--ink-3);
+  display:flex; align-items:center; gap:var(--s2);
+}
+.hero__disc-note::before,
+.hero__disc-note::after{ content:""; width:var(--s5); height:1px; background:var(--edge-hot); }
+
+/* ── TEASER (the brand gesture, with a real axis under it) ─── */
 .teaser{
-  margin:clamp(44px,7vw,76px) auto 0; max-width:var(--measure);
+  margin:clamp(40px,6vw,72px) auto 0; max-width:var(--measure);
   border:1px solid var(--edge); border-radius:var(--r);
   background:linear-gradient(180deg,var(--panel),var(--panel-deep));
+  box-shadow:var(--e1), var(--bezel);
   overflow:hidden;
+  padding-bottom:var(--s3);
 }
 .teaser__cap{
-  display:flex; align-items:center; justify-content:space-between;
-  padding:9px 14px; border-bottom:1px solid var(--edge);
+  display:flex; align-items:center; justify-content:space-between; gap:var(--s3);
+  padding:var(--s3) var(--gut); border-bottom:1px solid var(--edge);
   font-size:9.5px; letter-spacing:.18em; text-transform:uppercase; color:var(--ink-3);
 }
-.teaser__state{ color:var(--green); transition:color .4s; }
+.teaser__state{ color:var(--green); transition:color var(--t-slow) var(--ease); }
+.teaser__state::before{ content:"state "; color:var(--ink-3); }
 .teaser__state[data-hurt="1"]{ color:var(--red); }
-#teaser{ display:block; width:100%; height:72px; }
+#teaser{ display:block; width:100%; height:96px; }
 
-/* ── SECTIONS ─────────────────────────────────────────────── */
-.sec{ max-width:var(--measure); margin:0 auto; padding:clamp(64px,10vw,112px) var(--gut) 0; }
-.sec__head{ max-width:60ch; }
+/* ═══ SECTIONS ══════════════════════════════════════════════════ */
+.sec{ max-width:var(--measure); margin:0 auto; padding:clamp(64px,9vw,96px) var(--gut) 0; }
+.sec__head{ max-width:none; }
+
+/* the dimension callout — a tick, a label, and a leader running
+   out to the edge of the measurement. Every section is annotated
+   the way a lab report annotates a figure. */
 .eyebrow{
-  display:block; font-size:10px; letter-spacing:.34em; text-transform:uppercase; color:var(--ink-3);
-  margin-bottom:16px;
+  display:flex; align-items:center; gap:var(--s3);
+  font-size:var(--t-micro); letter-spacing:var(--track-eyebrow); text-transform:uppercase;
+  color:var(--ink-3); margin-bottom:var(--s5);
 }
-.eyebrow::before{ content:"— "; }
+.eyebrow::before{
+  content:""; flex:none; width:var(--s5); height:5px;
+  border-left:1px solid var(--amber); border-bottom:1px solid var(--amber); border-right:1px solid var(--amber);
+}
+.eyebrow::after{
+  content:""; flex:1; height:1px; min-width:var(--s5);
+  background:linear-gradient(90deg, var(--edge-hot), transparent);
+}
+
 .sec__head h2, .close h2{
-  margin:0; font-family:var(--mono); font-weight:700;
-  font-size:clamp(24px,3.9vw,38px); line-height:1.12; letter-spacing:-.03em; color:var(--ink);
+  margin:0; max-width:22ch; font-family:var(--sans); font-weight:650;
+  font-size:var(--t-h2); line-height:1.14; letter-spacing:var(--track-tight); color:var(--ink);
 }
 .sec__lede{
-  margin:18px 0 0; font-family:var(--sans); font-size:15px; line-height:1.7; color:var(--ink-2);
+  margin:var(--s5) 0 0; max-width:var(--prose);
+  font-family:var(--sans); font-size:var(--t-lede); line-height:1.7; color:var(--ink-2);
 }
 
-/* steps */
-.steps{ list-style:none; margin:40px 0 0; padding:0; display:grid; gap:1px; background:var(--edge);
-  border:1px solid var(--edge); border-radius:var(--r); grid-template-columns:repeat(2,1fr); overflow:hidden; }
+/* ── the four phases ──────────────────────────────────────── */
+.steps{
+  list-style:none; margin:var(--s7) 0 0; padding:0;
+  display:grid; gap:1px; background:var(--edge);
+  border:1px solid var(--edge); border-radius:var(--r);
+  grid-template-columns:repeat(2,1fr); overflow:hidden;
+  box-shadow:var(--e1), var(--bezel);
+}
 .step{
-  position:relative; background:var(--panel); padding:26px var(--gut) 28px;
+  position:relative; background:var(--panel); padding:var(--s6) var(--s5) var(--s6);
   transition:background var(--t-mid) var(--ease);
 }
 .step::before{
-  content:""; position:absolute; left:0; top:0; bottom:0; width:2px; background:var(--ink);
+  content:""; position:absolute; left:0; top:0; bottom:0; width:2px; background:var(--amber);
   transform:scaleY(0); transform-origin:top;
   transition:transform var(--t-slow) var(--ease);
 }
 .step:hover{ background:var(--panel-2); }
 .step:hover::before{ transform:scaleY(1); }
+
+/* the phase number as a stamped plate, the way a rig stamps a run */
 .step__no{
-  display:block; font-size:9.5px; letter-spacing:.28em; text-transform:uppercase; color:var(--ink-3);
+  display:inline-flex; align-items:center; justify-content:center;
+  width:26px; height:26px; margin-bottom:var(--s4);
+  border:1px solid var(--edge-hot); border-radius:var(--r-sm);
+  font-size:var(--t-micro); letter-spacing:.06em; color:var(--ink-3);
 }
 .step h3{
-  margin:12px 0 10px; font-family:var(--mono); font-size:17px; font-weight:600;
-  letter-spacing:.01em; color:var(--ink);
+  margin:0 0 var(--s3); font-family:var(--sans); font-size:var(--t-h3); font-weight:650;
+  letter-spacing:-.012em; color:var(--ink);
 }
-.step p{ margin:0; font-family:var(--sans); font-size:13.5px; line-height:1.72; color:var(--ink-2); }
+.step p{ margin:0; font-family:var(--sans); font-size:var(--t-body); line-height:1.72; color:var(--ink-2); max-width:46ch; }
 
+/* ── RECEIPTS ─────────────────────────────────────────────────
+   Evidence in an engineering-report register: three columns ruled
+   off from each other, the sentence set in sans because a person
+   wrote it, the citation in mono because it is a reference. */
+.receipts{
+  list-style:none; margin:var(--s7) 0 0; padding:0;
+  display:grid; grid-template-columns:repeat(3,1fr); gap:1px;
+  background:var(--edge); border-top:1px solid var(--edge); border-bottom:1px solid var(--edge);
+}
+.receipt{
+  background:var(--floor); padding:var(--s5) var(--s5) var(--s5) 0;
+  display:flex; flex-direction:column; gap:var(--s4);
+}
+.receipt:not(:first-child){ padding-left:var(--s5); }
+/* the years are the argument: 2024, 2025, 2026 — it keeps happening */
+.receipt__year{
+  font-family:var(--mono); font-size:var(--t-h3); font-weight:700;
+  letter-spacing:.02em; color:var(--amber);
+}
+.receipt blockquote{ flex:1; }
+.receipt__src{ margin-top:auto; }
+.receipt blockquote{
+  margin:0; font-family:var(--sans); font-size:var(--t-lede); line-height:1.55;
+  letter-spacing:-.008em; color:var(--ink);
+}
+.receipt blockquote::before{ content:"“"; color:var(--amber); }
+.receipt blockquote::after{ content:"”"; color:var(--amber); }
+.receipt__src{
+  margin:0; display:flex; flex-direction:column; gap:var(--s1);
+  font-size:9.5px; letter-spacing:.14em; text-transform:uppercase;
+}
+.receipt__src a{ color:var(--ink-2); text-decoration:none; border-bottom:1px solid var(--edge-hot); align-self:flex-start; }
+.receipt__src a:hover{ color:var(--ink); border-color:var(--amber); }
+.receipt__who{ color:var(--ink-2); }
+.receipt__src span:last-child{ color:var(--ink-3); letter-spacing:.1em; text-transform:none; font-size:var(--t-micro); }
+.receipts__note{
+  margin:var(--s5) 0 0; font-family:var(--sans); font-size:var(--t-body); line-height:1.7;
+  color:var(--ink-3); max-width:var(--prose);
+}
 
 /* ── THE CLAIM ────────────────────────────────────────────── */
 .claim{
-  max-width:var(--measure); margin:clamp(64px,10vw,112px) auto 0; padding:0 var(--gut);
+  max-width:var(--measure); margin:clamp(64px,9vw,96px) auto 0; padding:0 var(--gut);
 }
 .claim__line{
-  margin:0; font-family:var(--mono); font-weight:700;
-  font-size:clamp(22px,4.4vw,44px); line-height:1.18; letter-spacing:-.03em; color:var(--ink-2);
-  border-left:2px solid var(--ink); padding-left:clamp(16px,3vw,30px);
+  margin:0; max-width:24ch;
+  font-family:var(--sans); font-weight:650;
+  font-size:clamp(24px,4.2vw,42px); line-height:1.16; letter-spacing:var(--track-tight); color:var(--ink-3);
+  border-left:2px solid var(--amber); padding-left:clamp(16px,3vw,32px);
 }
-.claim__line b{ color:var(--ink); font-weight:700; }
+.claim__line b{ color:var(--ink); font-weight:650; }
+.claim__foot{ margin:var(--s6) 0 0; padding-left:clamp(16px,3vw,34px); }
+.claim__foot .eyebrow{ margin-bottom:0; }
 .claim__prior{
-  margin:30px 0 0; padding-left:clamp(16px,3vw,32px); max-width:74ch;
-  font-family:var(--sans); font-size:13.5px; line-height:1.75; color:var(--ink-3);
+  margin:var(--s4) 0 0; padding-left:clamp(16px,3vw,34px); max-width:74ch;
+  font-family:var(--sans); font-size:var(--t-body); line-height:1.78; color:var(--ink-2);
 }
 .claim__prior code{
-  font-family:var(--mono); font-size:12.5px; color:var(--ink-2);
-  border:1px solid var(--edge); border-radius:2px; padding:1px 5px; white-space:nowrap;
+  font-family:var(--mono); font-size:12px; color:var(--ink-2);
+  border:1px solid var(--edge); border-radius:var(--r-sm); padding:1px 5px; white-space:nowrap;
 }
 
 /* ── ZEROPS ───────────────────────────────────────────────── */
 .topo--big{
-  margin-top:38px; display:block; padding:26px var(--gut);
+  margin-top:var(--s7); display:block; padding:var(--s6) var(--s5);
   border:1px solid var(--edge); border-radius:var(--r);
   background:linear-gradient(180deg,var(--panel),var(--panel-deep));
+  box-shadow:var(--e1), var(--bezel);
 }
-.topo--big .topo__flow{ display:flex; align-items:center; gap:0; margin:0; padding:0; list-style:none; flex-wrap:wrap; row-gap:12px; }
+.topo--big .topo__flow{ display:flex; align-items:center; gap:0; margin:0; padding:0; list-style:none; flex-wrap:wrap; row-gap:var(--s3); }
 .topo--big .node{
   display:flex; flex-direction:column; gap:3px;
-  padding:11px 15px; border:1px solid var(--edge); border-radius:var(--r); background:var(--panel-2);
+  padding:var(--s3) var(--s4); border:1px solid var(--edge); border-radius:var(--r-sm); background:var(--panel-2);
 }
-.topo--big .node b{ font-size:11px; letter-spacing:.2em; text-transform:uppercase; color:var(--ink); }
+.topo--big .node b{ font-size:var(--t-label); letter-spacing:var(--track-label); text-transform:uppercase; color:var(--ink); }
 .topo--big .node span{ font-size:9.5px; letter-spacing:.12em; text-transform:uppercase; color:var(--ink-3); }
-.topo--big .node + .node{ margin-left:34px; position:relative; }
+.topo--big .node + .node{ margin-left:var(--s6); position:relative; }
 .topo--big .node + .node::before{
-  content:""; position:absolute; left:-30px; top:50%; width:26px; height:1px; background:var(--edge-hot);
+  content:""; position:absolute; left:-28px; top:50%; width:24px; height:1px; background:var(--edge-hot);
 }
 .topo--big .node + .node::after{
   content:""; position:absolute; left:-9px; top:50%; transform:translateY(-50%);
   border-left:5px solid var(--edge-hot); border-top:3.5px solid transparent; border-bottom:3.5px solid transparent;
 }
 
-.twins{ margin-top:24px; padding-top:20px; border-top:1px dashed var(--edge); }
-.twins__label{ font-size:9.5px; letter-spacing:.28em; text-transform:uppercase; color:var(--ink-3); }
-.twins__row{ display:flex; gap:8px; flex-wrap:wrap; margin-top:11px; }
+.twins{ margin-top:var(--s5); padding-top:var(--s5); border-top:1px dashed var(--edge); }
+.twins__label{ font-size:9.5px; letter-spacing:var(--track-eyebrow); text-transform:uppercase; color:var(--ink-3); }
+.twins__row{ display:flex; gap:var(--s2); flex-wrap:wrap; margin-top:var(--s3); align-items:center; }
 .dummy{
   transition:border-color var(--t-mid) var(--ease), color var(--t-mid) var(--ease);
   font-size:9.5px; letter-spacing:.16em; text-transform:uppercase; color:var(--ink-2);
-  border:1px dashed var(--edge-hot); border-radius:var(--r); padding:8px 13px;
+  border:1px dashed var(--edge-hot); border-radius:var(--r-sm); padding:var(--s2) var(--s3);
 }
 .dummy--tpl{ border-style:solid; border-color:var(--ink-3); color:var(--ink); }
 .dummy--gone{ color:var(--ink-3); text-decoration:line-through; opacity:.6; }
-.twins__note{ margin:14px 0 0; font-family:var(--sans); font-size:13px; line-height:1.65; color:var(--ink-3); }
+.twins__note{ margin:var(--s4) 0 0; font-family:var(--sans); font-size:var(--t-body); line-height:1.7; color:var(--ink-3); max-width:60ch; }
 
 .selfhost{
-  margin:24px 0 0; font-family:var(--sans); font-size:15px; line-height:1.7; color:var(--ink-2); max-width:60ch;
+  margin:var(--s5) 0 0; font-family:var(--sans); font-size:var(--t-lede); line-height:1.7; color:var(--ink-2); max-width:var(--prose);
 }
 
 /* ── CLOSE ────────────────────────────────────────────────── */
 .close{
-  max-width:var(--measure); margin:clamp(72px,11vw,124px) auto 0;
-  padding:clamp(40px,6vw,60px) var(--gut); text-align:center;
+  max-width:var(--measure); margin:clamp(72px,10vw,112px) auto 0;
+  padding:clamp(48px,6vw,64px) var(--gut); text-align:center;
   border-top:1px solid var(--edge);
 }
-.close p{ margin:14px 0 28px; font-family:var(--sans); font-size:15px; color:var(--ink-2); }
+.close h2{ max-width:none; }
+.close p{ margin:var(--s4) 0 var(--s6); font-family:var(--sans); font-size:var(--t-lede); color:var(--ink-2); }
+
+/* ═══ SIGN-OFF ══════════════════════════════════════════════════
+   The page's emotional close. Full-bleed: the lab's own trace runs
+   edge to edge with its heartbeat spikes and the small red gap at
+   impact centre, and the name sits beneath it at full size, cropped
+   by the bottom of the frame. The gradient fill etches the letters —
+   bright at the crown, dissolving into the floor at the crop — so it
+   reads as a surface the page ends on, not a second logo.
+   ─────────────────────────────────────────────────────────────── */
+.signoff{
+  margin-top:clamp(40px,6vw,72px);
+  overflow:hidden;
+  -webkit-user-select:none; user-select:none;
+}
+
+/* The trace, masked away at BOTH horizontal ends so it has no visible
+   start or finish — it is simply passing through the page. Stroke is a
+   gradient: ink at the edges, a whisper of the health green at centre. */
+.sig-line{ stroke:var(--ink); opacity:.34; stroke-dasharray:960; stroke-dashoffset:0; }
+.sig-gap { stroke:var(--red);  opacity:.5; }
+.sig-stop-ink  { stop-color:var(--ink);   stop-opacity:.55; }
+.sig-stop-green{ stop-color:var(--green); stop-opacity:.9; }
+
+.signoff__pulse{
+  --rise:0px;
+  -webkit-mask-image:linear-gradient(90deg, transparent, #000 14%, #000 86%, transparent);
+  mask-image:linear-gradient(90deg, transparent, #000 14%, #000 86%, transparent);
+}
+.signoff__pulse svg{ display:block; width:100%; height:clamp(38px,5.5vw,84px); overflow:visible; }
+.signoff__pulse .sig-line{ opacity:1; filter:drop-shadow(0 0 6px var(--green-glow)); }
+.signoff__pulse.in .sig-line{ animation:sig-draw 1600ms var(--ease) both; }
+.signoff__pulse.in .sig-line--b{ animation-delay:140ms; }
+@keyframes sig-draw{ from{ stroke-dashoffset:960; } }
+
+/* The name, at the size it deserves. The gradient runs bright at the
+   crown, mid through the body, and reaches full transparency at 88% —
+   so the letterforms DISSOLVE into the floor instead of being cut off.
+   The negative bottom margin then crops what little is left. */
+.signoff__word{
+  --rise:60px;
+  margin:clamp(4px,1vw,14px) 0 -.06em;
+  padding:0 var(--gut);
+  font-family:var(--mono); font-weight:700;
+  font-size:clamp(5rem, 33vw, 26rem); line-height:.82;
+  letter-spacing:-.045em; white-space:nowrap;
+  transition-delay:260ms !important;
+  transition-timing-function:var(--ease-strong);
+
+  color:var(--ink);
+  background-image:var(--signoff-fill);
+}
+@supports ((-webkit-background-clip:text) or (background-clip:text)){
+  .signoff__word{
+    -webkit-background-clip:text; background-clip:text;
+    -webkit-text-fill-color:transparent; color:transparent;
+  }
+}
+
+/* ── the ambient heartbeat ────────────────────────────────────
+   Fixed to the bottom edge, masked so it fades upward into nothing.
+   landing.js drives its opacity from scroll position and hands it
+   off to the sign-off pulse as the finale arrives. */
+.ambient{
+  position:fixed; inset:auto 0 0 0; height:clamp(110px,16vh,190px);
+  z-index:0; pointer-events:none; opacity:.1; overflow:hidden;
+  -webkit-mask-image:linear-gradient(0deg, #000, #000 42%, transparent);
+  mask-image:linear-gradient(0deg, #000, #000 42%, transparent);
+}
+.ambient svg{ display:block; width:100%; height:100%; }
+/* named explicitly — a blanket `> *` rule here would restyle the
+   skip link's position and drop it into the flow */
+.landing > header,
+.landing > main,
+.landing > footer{ position:relative; z-index:1; }
 
 /* ── FOOT ─────────────────────────────────────────────────── */
 .foot--landing{
-  display:flex; align-items:center; justify-content:space-between; gap:12px;
-  text-align:left; margin-top:clamp(48px,7vw,80px);
+  display:flex; align-items:center; justify-content:space-between; gap:var(--s3);
+  text-align:left; margin-top:var(--s7);
 }
 .foot__link{ color:var(--ink-3); text-decoration:none; border-bottom:1px solid var(--edge); }
 .foot__link:hover{ color:var(--ink); border-color:var(--ink-2); }
 
 /* ── RESPONSIVE ───────────────────────────────────────────── */
+@media (max-width:920px){
+  .hero__inner{ grid-template-columns:1fr; gap:var(--s6); }
+  .hero__disc{ order:-1; align-items:flex-start; }
+  .hero__mark{ width:min(100%,148px); }
+  .hero__disc-note::before{ display:none; }
+  .hero__pitch{ max-width:18ch; }
+}
+@media (max-width:860px){
+  .receipts{ grid-template-columns:1fr; }
+  .receipt{ padding:var(--s5) 0; gap:var(--s3); }
+  .receipt:not(:first-child){ padding-left:0; }
+}
 @media (max-width:760px){
   .steps{ grid-template-columns:1fr; }
   .topo--big .topo__flow{ flex-direction:column; align-items:stretch; }
-  .topo--big .node + .node{ margin-left:0; margin-top:24px; }
+  .topo--big .node + .node{ margin-left:0; margin-top:var(--s5); }
   .topo--big .node + .node::before{ left:22px; top:-18px; width:1px; height:14px; }
   .topo--big .node + .node::after{
     left:19px; top:-6px; transform:none;
@@ -213,7 +402,9 @@
   .foot--landing{ flex-direction:column; text-align:center; }
 }
 @media (max-width:640px){
-  .hero__pitch{ max-width:16ch; }
-  .claim__line{ padding-left:14px; }
-  .claim__prior{ padding-left:14px; }
+  .hero__pitch{ max-width:15ch; }
+  .step{ padding:var(--s5) var(--s4); }
+  .claim__line{ padding-left:var(--s4); }
+  .claim__prior, .claim__foot{ padding-left:var(--s4); }
+  .plate i:not(:first-child){ margin-left:var(--s3); padding-left:var(--s3); }
 }

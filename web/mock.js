@@ -15,6 +15,7 @@
      ?mock=1            steady state, naive crash, safe run
      &nowarm=1          next run answers 503 no_warm_twin
      &speed=2           run the whole lifecycle at 2x
+     &invalid=1         the next run leaves an INVALID index behind
    ═══════════════════════════════════════════════════════════════ */
 (function (global) {
   'use strict';
@@ -69,6 +70,7 @@
     var qs = new URLSearchParams(global.location.search);
     var speed = Math.max(0.25, parseFloat(qs.get('speed')) || 1);
     var forceNoWarm = qs.get('nowarm') === '1';
+    var forceInvalid = qs.get('invalid') === '1';
 
     var handlers = null;
     var tick = null;
@@ -160,6 +162,9 @@
           }
         },
         duration_seconds: Math.round((now() - r.startedAt) / 100 * speed) / 10,
+        // A CONCURRENTLY build that does not finish leaves the index in
+        // the schema, marked INVALID. The API reports them; so do we.
+        invalid_indexes: r.invalid ? ['idx_orders_customer_id'] : [],
         error: null
       });
     }
@@ -238,6 +243,7 @@
           blockedFrom: isUnsafe ? t0 + lead : 0,
           blockedUntil: isUnsafe ? t0 + lead + freezeMs : 0,
           endsAt: isUnsafe ? t0 + lead + freezeMs + tail : t0 + 8000 / speed,
+          invalid: forceInvalid,
           byLabel: {
             checkout: { ok: 0, died: 0 },
             login: { ok: 0, died: 0 },

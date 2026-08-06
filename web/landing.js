@@ -26,6 +26,42 @@
     items.forEach(function (n) { io.observe(n); });
   }
 
+  /* ── the ambient heartbeat ───────────────────────────────
+     A fixed trace at the bottom edge that follows you down the page:
+     barely there at the top, a little stronger as you scroll, then
+     handing its opacity to the sign-off pulse as the finale rises —
+     so the two read as one heartbeat merging into the close.
+     rAF-throttled, passive listener, static under reduced motion. */
+  (function () {
+    var amb = document.getElementById('ambient');
+    if (!amb) return;
+    if (reduce.matches) { amb.style.opacity = '.08'; return; }
+
+    var finale = document.querySelector('.signoff');
+    var queued = false;
+
+    function apply() {
+      queued = false;
+      var vh = window.innerHeight || 1;
+      var progress = Math.min(1, window.scrollY / (vh * 1.1));
+      var op = 0.09 + progress * 0.16;
+      if (finale) {
+        var top = finale.getBoundingClientRect().top;
+        // the handoff: fade out exactly as the real pulse comes up
+        op *= Math.max(0, Math.min(1, (top - vh * 0.35) / (vh * 0.4)));
+      }
+      amb.style.opacity = op.toFixed(3);
+    }
+
+    addEventListener('scroll', function () {
+      if (queued) return;
+      queued = true;
+      requestAnimationFrame(apply);
+    }, { passive: true });
+    addEventListener('resize', apply, { passive: true });
+    apply();
+  })();
+
   document.querySelectorAll('a[href^="#"]').forEach(function (a) {
     a.addEventListener('click', function (e) {
       var href = a.getAttribute('href');
@@ -39,6 +75,7 @@
   });
 
   /* ── the pulse ──────────────────────────────────────────── */
+  var heroMark = document.getElementById('heroMark');
   var canvas = document.getElementById('teaser');
   if (!canvas) return;
   var stateEl = document.getElementById('teaserState');
@@ -53,6 +90,9 @@
       green: rgb('--chart-green-rgb', '47,224,138'),
       red: rgb('--chart-red-rgb', '255,59,48'),
       grid: v('--chart-grid', 'rgba(120,160,200,.09)'),
+      axisText: v('--chart-axis-text', 'rgba(148,165,185,.62)'),
+      mark: v('--chart-mark', 'rgba(232,163,63,.6)'),
+      markText: v('--chart-mark-text', 'rgba(232,163,63,.9)'),
       fade: rgb('--panel-fade-rgb', '13,19,27')
     };
   }
@@ -105,6 +145,7 @@
   function rgba(c, a) { return 'rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ',' + a + ')'; }
 
   var WINDOW = 6000;
+  var MONO = 'ui-monospace, SFMono-Regular, Menlo, monospace';
   var hurtState = 0;
   var loop = !reduce.matches;
   var staticAt = 0;
@@ -119,7 +160,7 @@
     while (pts.length && pts[0].t < now - WINDOW - 200) pts.shift();
     if (pts.length < 2) return;
 
-    var pad = 10, plotH = h - pad * 2;
+    var pad = 14, plotH = h - pad * 2;
     var X = function (t) { return (t - (now - WINDOW)) / WINDOW * w; };
     var Y = function (v) { return pad + plotH - (v / (BASE * 1.15)) * plotH; };
 
@@ -130,11 +171,53 @@
     ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(0, Y(BASE) + .5); ctx.lineTo(w, Y(BASE) + .5); ctx.stroke();
 
+    // the annotation: an amber leader at the exact instant the lock lands.
+    // Same marker vocabulary the lab's scope uses, so the two pages agree.
+    if (loop) {
+      for (var k = Math.floor((now - WINDOW) / CYCLE); k <= Math.ceil(now / CYCLE); k++) {
+        var mt = k * CYCLE + FREEZE_AT;
+        if (mt < now - WINDOW || mt > now) continue;
+        var mx = Math.round(X(mt)) + .5;
+        ctx.save();
+        ctx.strokeStyle = T.mark;
+        ctx.setLineDash([2, 3]);
+        ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(mx, pad - 6); ctx.lineTo(mx, pad + plotH); ctx.stroke();
+        ctx.restore();
+        ctx.fillStyle = T.markText;
+        ctx.font = '9px ' + MONO;
+        ctx.fillText('MIGRATION', Math.min(mx + 5, w - 66), pad - 1);
+      }
+    }
+
     var xa = X(pts[0].t), xb = X(pts[pts.length - 1].t);
     var head = pts[pts.length - 1];
     var headHurt = hurt(head.v);
 
     if (xb > xa) {
+      // area first, tinted along x by the same ramp as the trace and faded
+      // downward, so the space under the line is the distance it can fall
+      var area = ctx.createLinearGradient(xa, 0, xb, 0);
+      pts.forEach(function (p) {
+        area.addColorStop(Math.min(1, Math.max(0, (X(p.t) - xa) / (xb - xa))), rgba(mix(hurt(p.v)), .17));
+      });
+      ctx.save();
+      ctx.beginPath();
+      ctx.moveTo(xa, pad + plotH);
+      pts.forEach(function (p) { ctx.lineTo(X(p.t), Y(p.v)); });
+      ctx.lineTo(xb, pad + plotH);
+      ctx.closePath();
+      ctx.clip();
+      ctx.fillStyle = area;
+      ctx.fillRect(xa, pad, xb - xa, plotH);
+      var vfade = ctx.createLinearGradient(0, pad, 0, pad + plotH);
+      vfade.addColorStop(0, 'rgba(0,0,0,0)');
+      vfade.addColorStop(1, 'rgba(0,0,0,.94)');
+      ctx.globalCompositeOperation = 'destination-out';
+      ctx.fillStyle = vfade;
+      ctx.fillRect(xa, pad, xb - xa, plotH);
+      ctx.restore();
+
       var grad = ctx.createLinearGradient(xa, 0, xb, 0);
       pts.forEach(function (p) {
         grad.addColorStop(Math.min(1, Math.max(0, (X(p.t) - xa) / (xb - xa))), rgba(mix(hurt(p.v)), 1));
@@ -153,17 +236,25 @@
       ctx.beginPath(); ctx.arc(X(head.t), Y(head.v), 2.6, 0, Math.PI * 2); ctx.fill();
     }
 
-    // fade the trailing edge into the panel
-    var fade = ctx.createLinearGradient(0, 0, Math.min(90, w * 0.2), 0);
+    // fade the trailing edge into the panel — short and soft, so it reads
+    // as the trace running off the left of the scope, not as a swatch
+    var fw = Math.min(64, w * 0.12);
+    var fade = ctx.createLinearGradient(0, 0, fw, 0);
     fade.addColorStop(0, 'rgba(' + T.fade.join(',') + ',1)');
+    fade.addColorStop(.45, 'rgba(' + T.fade.join(',') + ',.65)');
     fade.addColorStop(1, 'rgba(' + T.fade.join(',') + ',0)');
     ctx.fillStyle = fade;
-    ctx.fillRect(0, 0, Math.min(90, w * 0.2), h);
+    ctx.fillRect(0, 0, fw, h);
 
-    if (stateEl && (headHurt > .5) !== (hurtState > .5)) {
+    if ((headHurt > .5) !== (hurtState > .5)) {
       hurtState = headHurt;
-      stateEl.dataset.hurt = headHurt > .5 ? '1' : '0';
-      stateEl.textContent = headHurt > .5 ? 'blocked' : 'nominal';
+      var hurting = headHurt > .5;
+      if (stateEl) {
+        stateEl.dataset.hurt = hurting ? '1' : '0';
+        stateEl.textContent = hurting ? 'blocked' : 'nominal';
+      }
+      // the mark blooms red on the same frame the trace flatlines
+      if (heroMark) heroMark.classList.toggle('is-bloom', hurting);
     }
   }
 

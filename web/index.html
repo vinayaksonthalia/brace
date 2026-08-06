@@ -4,9 +4,17 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Brace — the crash-test lab for database migrations</title>
-<meta name="description" content="Watch your migration freeze production — on a crash-test dummy, before your users ever feel it.">
+<meta name="description" content="Brace clones your database at production scale, fills it with live write traffic, then slams your migration into it — so you watch the freeze happen to a dummy instead of to your users.">
 <meta name="color-scheme" content="dark light">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 240 240'%3E%3Crect width='240' height='240' rx='48' fill='%230b0e14'/%3E%3Cg%3E%3Cpath d='M46 46h74v74H46z' fill='%23e8edf4'/%3E%3Cpath d='M120 120h74v74h-74z' fill='%23e8edf4'/%3E%3C/g%3E%3Ccircle cx='120' cy='120' r='74' fill='none' stroke='%23e8edf4' stroke-width='6'/%3E%3C/svg%3E">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Brace">
+<meta property="og:title" content="Brace — the crash-test lab for database migrations">
+<meta property="og:description" content="Clone the database, put live traffic in the seats, slam the migration into it. Measure the freeze and the casualties. Then prove the safe form hurts nobody.">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Brace — the crash-test lab for database migrations">
+<meta name="twitter:description" content="Watch your migration freeze production — on a crash-test dummy, before your users ever feel it.">
+<link rel="icon" href="brace-mark.svg" type="image/svg+xml">
+<link rel="alternate icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 240 240'%3E%3Crect width='240' height='240' rx='48' fill='%230d131b'/%3E%3Cpath d='M46 46h74v74H46z' fill='%23e8eef6'/%3E%3Cpath d='M120 120h74v74h-74z' fill='%23e8eef6'/%3E%3Ccircle cx='120' cy='120' r='74' fill='none' stroke='%23e8eef6' stroke-width='6'/%3E%3C/svg%3E">
 <script>(function(){var t;try{t=localStorage.getItem('brace:theme');}catch(e){}
 if(t!=='light'&&t!=='dark'){t=window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';}
 document.documentElement.setAttribute('data-theme',t);})();</script>
@@ -15,18 +23,33 @@ document.documentElement.setAttribute('data-theme',t);})();</script>
 </head>
 <body class="landing">
 
+<!-- The heartbeat that follows you down the page. It sits at the bottom
+     edge, grows a little as you scroll, and hands its opacity over to the
+     sign-off pulse as the finale comes into view — the two merge. -->
+<div class="ambient" id="ambient" aria-hidden="true">
+  <svg viewBox="0 0 1600 120" preserveAspectRatio="none" focusable="false">
+    <path class="sig-line" fill="none" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"
+          d="M 0 62 H 286 l 9 -17 l 11 34 l 9 -17 H 470 l 7 -9 l 8 18 l 7 -9 H 640"/>
+    <path class="sig-gap" fill="none" stroke-width="2.5" stroke-linecap="round" d="M 640 62 H 736"/>
+    <path class="sig-line" fill="none" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"
+          d="M 736 62 H 940 l 9 -17 l 11 34 l 9 -17 H 1180 l 7 -9 l 8 18 l 7 -9 H 1370 l 9 -17 l 11 34 l 9 -17 H 1600"/>
+  </svg>
+</div>
+
 <a class="skip" href="#how">Skip to how it works</a>
 
 <!-- ══ RAIL ═══════════════════════════════════════════════════ -->
 <header class="rail">
   <div class="rail__brand">
-    <svg class="mark" viewBox="44 44 152 152" aria-hidden="true">
+    <svg class="mark mark--live" viewBox="44 44 152 152" aria-hidden="true">
       <defs><clipPath id="mkr"><circle cx="120" cy="120" r="74"/></clipPath></defs>
       <g clip-path="url(#mkr)">
         <rect x="46" y="46" width="74" height="74" class="mark__on"/>
         <rect x="120" y="46" width="74" height="74" class="mark__off"/>
         <rect x="46" y="120" width="74" height="74" class="mark__off"/>
         <rect x="120" y="120" width="74" height="74" class="mark__on"/>
+        <path class="m-pulse" d="M 46 120 H 104 l 6 -16 l 8 32 l 6 -16 H 194"
+              fill="none" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
       </g>
       <circle cx="120" cy="120" r="74" fill="none" class="mark__ring" stroke-width="3"/>
     </svg>
@@ -52,45 +75,105 @@ document.documentElement.setAttribute('data-theme',t);})();</script>
 <!-- ══ HERO ═══════════════════════════════════════════════════ -->
 <section class="hero">
   <div class="hero__inner reveal">
+    <div class="hero__say">
+      <p class="plate"><i>Specimen</i> your migration <i>Method</i> full-scale impact</p>
+      <h1 class="hero__pitch">The crash-test lab for database migrations.</h1>
+      <p class="hero__sub">Watch your migration freeze production — on a crash-test dummy, before your users ever feel it.</p>
 
-    <svg class="hero__mark" viewBox="0 0 240 240" role="img" aria-label="Brace">
-      <defs><clipPath id="hm"><circle cx="120" cy="120" r="74"/></clipPath></defs>
-      <g clip-path="url(#hm)">
-        <rect x="46" y="46" width="74" height="74" class="mark__on"/>
-        <rect x="120" y="46" width="74" height="74" class="mark__off"/>
-        <rect x="46" y="120" width="74" height="74" class="mark__off"/>
-        <rect x="120" y="120" width="74" height="74" class="mark__on"/>
-      </g>
-      <circle cx="120" cy="120" r="74" fill="none" class="mark__ring" stroke-width="3"/>
-      <g class="mark__sig" stroke-width="5" fill="none" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M 22 120 H 68 l 8 -22 l 10 44 l 8 -22 H 106"/>
-        <path d="M 134 120 H 218"/>
-      </g>
-      <g class="mark__tick" stroke-width="2">
-        <line x1="106" y1="112" x2="106" y2="128"/>
-        <line x1="134" y1="112" x2="134" y2="128"/>
-      </g>
-    </svg>
-
-    <p class="hero__word">brace</p>
-    <h1 class="hero__pitch">The crash-test lab for database migrations.</h1>
-    <p class="hero__sub">Watch your migration freeze production — on a crash-test dummy, before your users ever feel it.</p>
-
-    <div class="hero__cta">
-      <a class="btn btn--primary" href="lab.html">Enter the lab <span aria-hidden="true">→</span></a>
-      <a class="btn btn--ghost" href="#how">How it works <span aria-hidden="true">↓</span></a>
+      <div class="hero__cta">
+        <a class="btn btn--primary" href="lab.html">Enter the lab <span aria-hidden="true">→</span></a>
+        <a class="btn btn--ghost" href="#how">How it works <span aria-hidden="true">↓</span></a>
+      </div>
+      <p class="hero__nofriction">No account. No signup. The lab is already running.</p>
     </div>
-    <p class="hero__nofriction">No account. No signup. The lab is already running.</p>
+
+    <div class="hero__disc" aria-hidden="true">
+      <!-- The calibration assembly plays once, then the pulse loops, and the
+           bloom is fired from landing.js at the exact frame the teaser below
+           flatlines — the mark and the live trace crash together. -->
+      <svg class="hero__mark mark--hero" id="heroMark" viewBox="0 0 240 240">
+        <defs><clipPath id="hm"><circle cx="120" cy="120" r="74"/></clipPath></defs>
+        <g class="m-q m-q--on" clip-path="url(#hm)">
+          <rect x="46" y="46" width="74" height="74" class="mark__on"/>
+          <rect x="120" y="120" width="74" height="74" class="mark__on"/>
+        </g>
+        <g class="m-q m-q--off" clip-path="url(#hm)">
+          <rect x="120" y="46" width="74" height="74" class="mark__off"/>
+          <rect x="46" y="120" width="74" height="74" class="mark__off"/>
+        </g>
+        <circle cx="120" cy="120" r="74" fill="none" class="mark__ring" stroke-width="3"/>
+        <circle cx="120" cy="120" r="74" fill="none" class="m-lock" stroke-width="5"/>
+
+        <circle cx="120" cy="120" r="10" class="m-bloom"/>
+
+        <g fill="none" stroke-width="5" stroke-linecap="round" stroke-linejoin="round">
+          <path class="m-ghost" d="M 22 120 H 68 l 8 -22 l 10 44 l 8 -22 H 106"/>
+          <path class="m-ghost" d="M 134 120 H 218"/>
+          <path class="m-ghost-gap" d="M 106 120 H 134"/>
+          <path class="m-pulse" d="M 22 120 H 68 l 8 -22 l 10 44 l 8 -22 H 106 L 134 120 H 218"/>
+          <path class="m-gap" d="M 106 120 H 134"/>
+        </g>
+
+        <g class="mark__tick" stroke-width="2">
+          <line x1="106" y1="112" x2="106" y2="128"/>
+          <line x1="134" y1="112" x2="134" y2="128"/>
+        </g>
+      </svg>
+      <span class="hero__disc-note">calibration disc · impact centre</span>
+    </div>
   </div>
 
   <!-- signature gesture: the pulse, and what happens to it -->
-  <figure class="teaser" aria-label="Live write traffic, freezing under a blocking migration">
+  <figure class="teaser reveal" aria-label="Live write traffic, freezing under a blocking migration">
     <figcaption class="teaser__cap">
-      <span class="teaser__label">writes / sec</span>
+      <span class="teaser__label">writes / sec &nbsp;·&nbsp; live specimen</span>
       <span class="teaser__state" id="teaserState">nominal</span>
     </figcaption>
-    <canvas id="teaser" height="72"></canvas>
+    <canvas id="teaser" height="96"></canvas>
+    <div class="rail-scale" aria-hidden="true">
+      <b>−6s</b><b>−4.5</b><b>−3</b><b>−1.5</b><b class="rail-scale__now">now</b>
+    </div>
   </figure>
+</section>
+
+<!-- ══ RECEIPTS ═══════════════════════════════════════════════
+     Evidence, not testimonials. Three published incidents, cited
+     so anyone can go and check them. -->
+<section class="sec sec--receipts">
+  <header class="sec__head reveal">
+    <span class="eyebrow">incidents on record</span>
+    <h2>This is what a blocking lock does in production.</h2>
+    <p class="sec__lede">Three published incidents, three years running. Every one of them was a migration that passed review, passed staging, and then met real traffic.</p>
+  </header>
+
+  <ol class="receipts">
+    <li class="receipt reveal">
+      <span class="receipt__year">2024</span>
+      <blockquote>Queries piled up behind it, and clients timed out.</blockquote>
+      <p class="receipt__src">
+        <a href="https://gocardless.com/blog/zero-downtime-postgres-migrations-the-hard-parts/" target="_blank" rel="noopener noreferrer">GoCardless Engineering</a>
+        <span>~15 seconds of unexpected API downtime, during a planned migration</span>
+      </p>
+    </li>
+    <li class="receipt reveal">
+      <span class="receipt__year">2025</span>
+      <blockquote>Failed to acquire a database lock on a busy table.</blockquote>
+      <p class="receipt__src">
+        <a href="https://gitlab.com/gitlab-com/gl-infra/production/-/issues/20494" target="_blank" rel="noopener noreferrer">GitLab production incident #20494</a>
+        <span>repeated timeouts, public incident record</span>
+      </p>
+    </li>
+    <li class="receipt reveal">
+      <span class="receipt__year">2026</span>
+      <blockquote>There were always active queries holding locks.</blockquote>
+      <p class="receipt__src">
+        <span class="receipt__who">Autumn postmortem</span>
+        <span>an ALTER TABLE wanting an exclusive lock denied ~10% of API requests</span>
+      </p>
+    </li>
+  </ol>
+
+  <p class="receipts__note">Every one of these was survivable on a dummy first. That is the whole idea.</p>
 </section>
 
 <!-- ══ HOW IT WORKS ═══════════════════════════════════════════ -->
@@ -103,22 +186,22 @@ document.documentElement.setAttribute('data-theme',t);})();</script>
 
   <ol class="steps">
     <li class="step reveal">
-      <span class="step__no">phase 01</span>
+      <span class="step__no">01</span>
       <h3>The dummy</h3>
       <p>A full-size clone of your database — same row counts, same indexes, same planner statistics — created in seconds from a seeded template. Not a 100-row fixture. The lock behaviour you are about to see is the lock behaviour you would get.</p>
     </li>
     <li class="step reveal">
-      <span class="step__no">phase 02</span>
+      <span class="step__no">02</span>
       <h3>The passengers</h3>
       <p>Live, labelled write traffic fills the seats: checkouts, logins, cart adds — each with the request timeout every real stack already has. Without traffic, every migration looks safe.</p>
     </li>
     <li class="step reveal">
-      <span class="step__no">phase 03</span>
+      <span class="step__no">03</span>
       <h3>The crash</h3>
       <p>Your migration runs against the twin while the traffic is live. If it takes a blocking lock, writes freeze — and the ones that wait past their timeout die, exactly as they would in production. The pulse line goes red as it happens.</p>
     </li>
     <li class="step reveal">
-      <span class="step__no">phase 04</span>
+      <span class="step__no">04</span>
       <h3>The report</h3>
       <p>How long writes were frozen. How many writes actually died. Then, clearly labelled as a projection with the formula shown, what that freeze costs at your traffic: denied checkouts, denied logins. Measured numbers first, always.</p>
     </li>
@@ -128,8 +211,10 @@ document.documentElement.setAttribute('data-theme',t);})();</script>
 <!-- ══ THE CLAIM ══════════════════════════════════════════════ -->
 <section class="claim reveal">
   <p class="claim__line">Linters read the car's blueprint and guess.<br><b>Brace crashes the car.</b></p>
-  <p class="claim__prior">
+  <div class="claim__foot">
     <span class="eyebrow">honest about the neighbours</span>
+  </div>
+  <p class="claim__prior">
     <code>squawk</code> and <code>eugene</code> lint the migration file and warn you by pattern — they never run it.
     <code>Postgres.ai</code> gives you a real clone, but it sits idle: no traffic, so no lock contention and nothing to measure.
     None of them translate a lock into a number of denied checkouts. That translation is the entire product.
@@ -170,6 +255,33 @@ document.documentElement.setAttribute('data-theme',t);})();</script>
   <h2>Bring your own migration.</h2>
   <p>Paste the one you are nervous about. It runs on a dummy, not on your users.</p>
   <a class="btn btn--primary btn--lg" href="lab.html">Enter the lab <span aria-hidden="true">→</span></a>
+</section>
+
+<!-- ══ SIGN-OFF ═══════════════════════════════════════════════
+     The emotional close: the lab at rest. The brand's own trace runs
+     full-bleed across the page — heartbeat spikes, the small red gap
+     at impact centre — and the name sits under it at full size,
+     cropped by the bottom of the frame. Name, then silence. -->
+<section class="signoff" aria-hidden="true">
+  <div class="signoff__pulse reveal">
+    <svg viewBox="0 0 1600 80" preserveAspectRatio="none" focusable="false">
+      <defs>
+        <linearGradient id="sigGrad" x1="0" x2="1" y1="0" y2="0">
+          <stop offset="0"   class="sig-stop-ink"/>
+          <stop offset=".46" class="sig-stop-green"/>
+          <stop offset="1"   class="sig-stop-ink"/>
+        </linearGradient>
+      </defs>
+      <path class="sig-line" fill="none" stroke="url(#sigGrad)" stroke-width="2.5"
+            stroke-linecap="round" stroke-linejoin="round"
+            d="M 0 40 H 286 l 9 -17 l 11 34 l 9 -17 H 470 l 7 -9 l 8 18 l 7 -9 H 640"/>
+      <path class="sig-gap" fill="none" stroke-width="2.5" stroke-linecap="round" d="M 640 40 H 736"/>
+      <path class="sig-line sig-line--b" fill="none" stroke="url(#sigGrad)" stroke-width="2.5"
+            stroke-linecap="round" stroke-linejoin="round"
+            d="M 736 40 H 940 l 9 -17 l 11 34 l 9 -17 H 1180 l 7 -9 l 8 18 l 7 -9 H 1370 l 9 -17 l 11 34 l 9 -17 H 1600"/>
+    </svg>
+  </div>
+  <p class="signoff__word reveal">brace</p>
 </section>
 
 </main>
