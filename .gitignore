@@ -1,0 +1,21 @@
+# secrets — never committed, no exceptions
+.env
+.env.*
+*.pem
+*.key
+*token*
+*password*
+.zcli.yml
+
+# build artifacts
+/app
+/api/app
+*.o
+*.test
+dist/
+
+# local noise
+.DS_Store
+*.log
+tmp/
+scratch/
