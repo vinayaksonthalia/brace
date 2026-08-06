@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Brace — the crash-test lab for database migrations</title>
+<meta name="description" content="Watch your migration freeze production — on a crash-test dummy, before your users ever feel it.">
+<meta name="color-scheme" content="dark light">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 240 240'%3E%3Crect width='240' height='240' rx='48' fill='%230b0e14'/%3E%3Cg%3E%3Cpath d='M46 46h74v74H46z' fill='%23e8edf4'/%3E%3Cpath d='M120 120h74v74h-74z' fill='%23e8edf4'/%3E%3C/g%3E%3Ccircle cx='120' cy='120' r='74' fill='none' stroke='%23e8edf4' stroke-width='6'/%3E%3C/svg%3E">
+<script>(function(){var t;try{t=localStorage.getItem('brace:theme');}catch(e){}
+if(t!=='light'&&t!=='dark'){t=window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';}
+document.documentElement.setAttribute('data-theme',t);})();</script>
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="landing.css">
+</head>
+<body class="landing">
+
+<a class="skip" href="#how">Skip to how it works</a>
+
+<!-- ══ RAIL ═══════════════════════════════════════════════════ -->
+<header class="rail">
+  <div class="rail__brand">
+    <svg class="mark" viewBox="44 44 152 152" aria-hidden="true">
+      <defs><clipPath id="mkr"><circle cx="120" cy="120" r="74"/></clipPath></defs>
+      <g clip-path="url(#mkr)">
+        <rect x="46" y="46" width="74" height="74" class="mark__on"/>
+        <rect x="120" y="46" width="74" height="74" class="mark__off"/>
+        <rect x="46" y="120" width="74" height="74" class="mark__off"/>
+        <rect x="120" y="120" width="74" height="74" class="mark__on"/>
+      </g>
+      <circle cx="120" cy="120" r="74" fill="none" class="mark__ring" stroke-width="3"/>
+    </svg>
+    <div class="rail__names"><b>BRACE</b><span>crash-test lab for database migrations</span></div>
+  </div>
+  <div class="rail__meta">
+    <button type="button" class="chip chip--theme" id="themeToggle" aria-pressed="false" aria-label="Switch to light theme">
+      <svg class="ico" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+        <circle class="ico__sun" cx="12" cy="12" r="4.2"/>
+        <g class="ico__rays"><path d="M12 2.6v2.2M12 19.2v2.2M2.6 12h2.2M19.2 12h2.2M5.4 5.4l1.6 1.6M17 17l1.6 1.6M18.6 5.4L17 7M7 17l-1.6 1.6"/></g>
+        <path class="ico__moon" d="M20 14.2A8.4 8.4 0 0 1 9.8 4 8.4 8.4 0 1 0 20 14.2Z"/>
+      </svg>
+      <span class="chip__t">light</span>
+    </button>
+
+    <a class="chip chip--back" href="#how">how it works</a>
+    <a class="chip chip--go" href="lab.html">enter the lab →</a>
+  </div>
+</header>
+
+<main>
+
+<!-- ══ HERO ═══════════════════════════════════════════════════ -->
+<section class="hero">
+  <div class="hero__inner reveal">
+
+    <svg class="hero__mark" viewBox="0 0 240 240" role="img" aria-label="Brace">
+      <defs><clipPath id="hm"><circle cx="120" cy="120" r="74"/></clipPath></defs>
+      <g clip-path="url(#hm)">
+        <rect x="46" y="46" width="74" height="74" class="mark__on"/>
+        <rect x="120" y="46" width="74" height="74" class="mark__off"/>
+        <rect x="46" y="120" width="74" height="74" class="mark__off"/>
+        <rect x="120" y="120" width="74" height="74" class="mark__on"/>
+      </g>
+      <circle cx="120" cy="120" r="74" fill="none" class="mark__ring" stroke-width="3"/>
+      <g class="mark__sig" stroke-width="5" fill="none" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M 22 120 H 68 l 8 -22 l 10 44 l 8 -22 H 106"/>
+        <path d="M 134 120 H 218"/>
+      </g>
+      <g class="mark__tick" stroke-width="2">
+        <line x1="106" y1="112" x2="106" y2="128"/>
+        <line x1="134" y1="112" x2="134" y2="128"/>
+      </g>
+    </svg>
+
+    <p class="hero__word">brace</p>
+    <h1 class="hero__pitch">The crash-test lab for database migrations.</h1>
+    <p class="hero__sub">Watch your migration freeze production — on a crash-test dummy, before your users ever feel it.</p>
+
+    <div class="hero__cta">
+      <a class="btn btn--primary" href="lab.html">Enter the lab <span aria-hidden="true">→</span></a>
+      <a class="btn btn--ghost" href="#how">How it works <span aria-hidden="true">↓</span></a>
+    </div>
+    <p class="hero__nofriction">No account. No signup. The lab is already running.</p>
+  </div>
+
+  <!-- signature gesture: the pulse, and what happens to it -->
+  <figure class="teaser" aria-label="Live write traffic, freezing under a blocking migration">
+    <figcaption class="teaser__cap">
+      <span class="teaser__label">writes / sec</span>
+      <span class="teaser__state" id="teaserState">nominal</span>
+    </figcaption>
+    <canvas id="teaser" height="72"></canvas>
+  </figure>
+</section>
+
+<!-- ══ HOW IT WORKS ═══════════════════════════════════════════ -->
+<section class="sec" id="how">
+  <header class="sec__head reveal">
+    <span class="eyebrow">test procedure</span>
+    <h2>Four steps, in this order, every run.</h2>
+    <p class="sec__lede">A crash test is only worth anything if the dummy is full-size, the seats are occupied, and somebody measures the impact. Brace does all three, then throws the car away.</p>
+  </header>
+
+  <ol class="steps">
+    <li class="step reveal">
+      <span class="step__no">phase 01</span>
+      <h3>The dummy</h3>
+      <p>A full-size clone of your database — same row counts, same indexes, same planner statistics — created in seconds from a seeded template. Not a 100-row fixture. The lock behaviour you are about to see is the lock behaviour you would get.</p>
+    </li>
+    <li class="step reveal">
+      <span class="step__no">phase 02</span>
+      <h3>The passengers</h3>
+      <p>Live, labelled write traffic fills the seats: checkouts, logins, cart adds — each with the request timeout every real stack already has. Without traffic, every migration looks safe.</p>
+    </li>
+    <li class="step reveal">
+      <span class="step__no">phase 03</span>
+      <h3>The crash</h3>
+      <p>Your migration runs against the twin while the traffic is live. If it takes a blocking lock, writes freeze — and the ones that wait past their timeout die, exactly as they would in production. The pulse line goes red as it happens.</p>
+    </li>
+    <li class="step reveal">
+      <span class="step__no">phase 04</span>
+      <h3>The report</h3>
+      <p>How long writes were frozen. How many writes actually died. Then, clearly labelled as a projection with the formula shown, what that freeze costs at your traffic: denied checkouts, denied logins. Measured numbers first, always.</p>
+    </li>
+  </ol>
+</section>
+
+<!-- ══ THE CLAIM ══════════════════════════════════════════════ -->
+<section class="claim reveal">
+  <p class="claim__line">Linters read the car's blueprint and guess.<br><b>Brace crashes the car.</b></p>
+  <p class="claim__prior">
+    <span class="eyebrow">honest about the neighbours</span>
+    <code>squawk</code> and <code>eugene</code> lint the migration file and warn you by pattern — they never run it.
+    <code>Postgres.ai</code> gives you a real clone, but it sits idle: no traffic, so no lock contention and nothing to measure.
+    None of them translate a lock into a number of denied checkouts. That translation is the entire product.
+  </p>
+</section>
+
+<!-- ══ ZEROPS ═════════════════════════════════════════════════ -->
+<section class="sec sec--zerops">
+  <header class="sec__head reveal">
+    <span class="eyebrow">runs on zerops</span>
+    <h2>Three services. One import file.</h2>
+    <p class="sec__lede">Brace needs a real Postgres superuser, native template cloning, and a private network — so it is built on infrastructure that hands you all three instead of hiding them.</p>
+  </header>
+
+  <div class="topo topo--big reveal">
+    <ol class="topo__flow">
+      <li class="node"><b>web</b><span>static dashboard</span></li>
+      <li class="node"><b>api</b><span>go engine · sse</span></li>
+      <li class="node"><b>db</b><span>postgres 16 · dedicated vcpu</span></li>
+    </ol>
+    <div class="twins">
+      <span class="twins__label">clone lifecycle</span>
+      <div class="twins__row">
+        <span class="dummy dummy--tpl">template</span>
+        <span class="dummy">twin</span>
+        <span class="dummy">twin</span>
+        <span class="dummy dummy--gone">discarded</span>
+      </div>
+      <p class="twins__note">Every run clones the template into a throwaway twin over the private network, then drops it.</p>
+    </div>
+  </div>
+
+  <p class="selfhost reveal">Self-host it with one import file — your production data never leaves your infrastructure.</p>
+</section>
+
+<!-- ══ CLOSE ══════════════════════════════════════════════════ -->
+<section class="close reveal">
+  <h2>Bring your own migration.</h2>
+  <p>Paste the one you are nervous about. It runs on a dummy, not on your users.</p>
+  <a class="btn btn--primary btn--lg" href="lab.html">Enter the lab <span aria-hidden="true">→</span></a>
+</section>
+
+</main>
+
+<footer class="foot foot--landing">
+  <span>Every crash happens on a throwaway twin. Nothing real is ever at risk.</span>
+  <a href="#" class="foot__link" data-repo>GitHub</a>
+</footer>
+
+<script src="theme.js"></script>
+<script src="landing.js"></script>
+</body>
+</html>
