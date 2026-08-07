@@ -55,7 +55,8 @@ zerops:
 
   - setup: web
     build:
-      base: static
-      deployFiles: ./
+      base: alpine@latest
+      deployFiles: ./web/~
     run:
+      os: alpine
       base: static

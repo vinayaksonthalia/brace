@@ -12,6 +12,9 @@
    ═══════════════════════════════════════════════════════════════ */
 (function () {
   'use strict';
+const API = window.BRACE_API_BASE || (/^web-[^.]+\./.test(location.host)
+  ? location.protocol + '//' + location.host.replace(/^web-([^.]+)\./, 'api-$1-8080.')
+  : '');
 
   var $ = function (s, r) { return (r || document).querySelector(s); };
   var qs = new URLSearchParams(location.search);
@@ -31,7 +34,7 @@
     isMock: false,
 
     status: function () {
-      return fetch('/api/status', { headers: { accept: 'application/json' } })
+      return fetch(API + '/api/status', { headers: { accept: 'application/json' } })
         .then(function (r) {
           if (!r.ok) throw new Error('status ' + r.status);
           return r.json();
@@ -39,7 +42,7 @@
     },
 
     run: function (sql) {
-      return fetch('/api/run', {
+      return fetch(API + '/api/run', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ sql: sql })
@@ -76,7 +79,7 @@
 
       function startSse() {
         if (closed) return;
-        es = new EventSource('/api/stream');
+        es = new EventSource(API + '/api/stream');
         es.addEventListener('open', function () { errors = 0; setMode('sse', 'live · sse'); });
         ['stats', 'run_started', 'run_finished'].forEach(function (n) {
           es.addEventListener(n, function (ev) { dispatch(n, ev.data); });
@@ -109,7 +112,7 @@
         setMode('poll', 'live · polling');
         var pull = function () {
           if (closed) return;
-          fetch('/api/stats', { headers: { accept: 'application/json' } })
+          fetch(API + '/api/stats', { headers: { accept: 'application/json' } })
             .then(function (r) { return r.json(); })
             .then(function (s) {
               if (closed) return;
@@ -821,13 +824,24 @@
   if (qs.get('mock') === '1') {
     boot(window.BraceMock.create());
   } else {
-    var timeout = new Promise(function (_, rej) { setTimeout(rej, 2500); });
-    Promise.race([BraceApi.status(), timeout])
+    var probeOnce = function (ms) {
+      return Promise.race([
+        BraceApi.status(),
+        new Promise(function (_, rej) { setTimeout(rej, ms); })
+      ]);
+    };
+    // First visit pays cross-origin TLS setup; give the rig a real chance
+    // (and one retry) before surrendering to the simulator.
+    probeOnce(6000)
       .then(function () { boot(BraceApi); })
       .catch(function () {
-        // No rig reachable — fall back to the simulator so the page is
-        // never a dead dashboard.
-        boot(window.BraceMock.create());
+        probeOnce(6000)
+          .then(function () { boot(BraceApi); })
+          .catch(function () {
+            // No rig reachable — fall back to the simulator so the page is
+            // never a dead dashboard.
+            boot(window.BraceMock.create());
+          });
       });
   }
 })();
