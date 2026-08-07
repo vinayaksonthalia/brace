@@ -1,0 +1,92 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 780 200" role="img" aria-label="brace — crash-test lab for database migrations">
+  <!-- BRACE animated lockup v3 — the mark CALIBRATES (quadrants rotate into
+       place, ring locks on) once; then the pulse draws forever, blooming red
+       at the impact gap. SMIL only (GitHub-README safe). -->
+  <defs>
+    <clipPath id="dz"><circle cx="100" cy="100" r="56"/></clipPath>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="3.2" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <rect width="780" height="200" fill="#0b0e14"/>
+
+  <!-- ============ THE CALIBRATION (plays once, 0 → 1.1s) ============ -->
+  <!-- light quadrant pair: rotates in from -100° -->
+  <g opacity="0">
+    <animate attributeName="opacity" values="0;1" dur="0.55s" begin="0.05s" fill="freeze"/>
+    <animateTransform attributeName="transform" type="rotate"
+      values="-100 100 100; 8 100 100; 0 100 100" keyTimes="0;0.8;1"
+      dur="0.85s" begin="0.05s" fill="freeze" calcMode="spline"
+      keySplines="0.2 0.8 0.25 1; 0.3 0 0.6 1"/>
+    <g clip-path="url(#dz)">
+      <rect x="44"  y="44"  width="56" height="56" fill="#e8edf4"/>
+      <rect x="100" y="100" width="56" height="56" fill="#e8edf4"/>
+    </g>
+  </g>
+  <!-- dark quadrant pair: rotates in from +100° -->
+  <g opacity="0">
+    <animate attributeName="opacity" values="0;1" dur="0.55s" begin="0.05s" fill="freeze"/>
+    <animateTransform attributeName="transform" type="rotate"
+      values="100 100 100; -8 100 100; 0 100 100" keyTimes="0;0.8;1"
+      dur="0.85s" begin="0.05s" fill="freeze" calcMode="spline"
+      keySplines="0.2 0.8 0.25 1; 0.3 0 0.6 1"/>
+    <g clip-path="url(#dz)">
+      <rect x="100" y="44"  width="56" height="56" fill="#151a23"/>
+      <rect x="44"  y="100" width="56" height="56" fill="#151a23"/>
+    </g>
+  </g>
+  <!-- the ring draws itself closed and locks (0.6 → 1.15s) -->
+  <circle cx="100" cy="100" r="56" fill="none" stroke="#e8edf4" stroke-width="2.5"
+          stroke-dasharray="352 352" stroke-dashoffset="352" transform="rotate(-90 100 100)">
+    <animate attributeName="stroke-dashoffset" values="352;0" dur="0.55s" begin="0.6s" fill="freeze"
+             calcMode="spline" keySplines="0.25 0.6 0.3 1"/>
+  </circle>
+  <!-- lock flash: a subtle white ring blink when calibration completes -->
+  <circle cx="100" cy="100" r="56" fill="none" stroke="#ffffff" stroke-width="4" opacity="0">
+    <animate attributeName="opacity" values="0;0.7;0" dur="0.35s" begin="1.15s" fill="freeze"/>
+  </circle>
+
+  <!-- ghost trace (fades in after calibration so the mark reads when idle) -->
+  <g opacity="0">
+    <animate attributeName="opacity" values="0;1" dur="0.4s" begin="1.2s" fill="freeze"/>
+    <path d="M 22 100 H 60 l 7 -20 l 9 40 l 7 -20 H 88 M 112 100 H 178"
+          fill="none" stroke="#e8edf4" stroke-width="5" stroke-linecap="round"
+          stroke-linejoin="round" opacity="0.18"/>
+    <path d="M 88 100 H 112" fill="none" stroke="#e5484d" stroke-width="5"
+          stroke-linecap="round" opacity="0.22"/>
+  </g>
+
+  <!-- ============ THE PULSE (loops forever from 1.5s) ============ -->
+  <path d="M 22 100 H 60 l 7 -20 l 9 40 l 7 -20 H 88 L 112 100 H 178"
+        fill="none" stroke="#ffffff" stroke-width="6" stroke-linecap="round"
+        stroke-linejoin="round" filter="url(#glow)"
+        stroke-dasharray="240 240" stroke-dashoffset="240" opacity="0">
+    <animate attributeName="stroke-dashoffset" values="240;0;0;0" keyTimes="0;0.4;0.85;1"
+             dur="4s" begin="1.5s" repeatCount="indefinite"/>
+    <animate attributeName="opacity" values="1;1;1;0" keyTimes="0;0.4;0.85;1"
+             dur="4s" begin="1.5s" repeatCount="indefinite"/>
+  </path>
+  <path d="M 88 100 H 112" fill="none" stroke="#ff4d52" stroke-width="6"
+        stroke-linecap="round" filter="url(#glow)" opacity="0">
+    <animate attributeName="opacity" values="0;0;1;1;0.25;0" keyTimes="0;0.26;0.32;0.6;0.85;1"
+             dur="4s" begin="1.5s" repeatCount="indefinite"/>
+    <animate attributeName="stroke-width" values="6;6;9;6;6;6" keyTimes="0;0.26;0.32;0.45;0.85;1"
+             dur="4s" begin="1.5s" repeatCount="indefinite"/>
+  </path>
+  <circle cx="100" cy="100" r="8" fill="#ff4d52" opacity="0">
+    <animate attributeName="opacity" values="0;0;0.85;0;0" keyTimes="0;0.27;0.31;0.42;1"
+             dur="4s" begin="1.5s" repeatCount="indefinite"/>
+    <animate attributeName="r" values="6;6;16;30;30" keyTimes="0;0.27;0.31;0.42;1"
+             dur="4s" begin="1.5s" repeatCount="indefinite"/>
+  </circle>
+
+  <!-- wordmark: types itself in during calibration -->
+  <text x="214" y="116" fill="#e8edf4" opacity="0"
+        font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', 'Cascadia Code', Menlo, Consolas, monospace"
+        font-size="64" font-weight="700" letter-spacing="2">brace<animate attributeName="opacity" values="0;1" dur="0.5s" begin="0.75s" fill="freeze"/></text>
+  <text x="218" y="150" fill="#6b7484" opacity="0"
+        font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace"
+        font-size="14" font-weight="500" letter-spacing="4">CRASH-TEST LAB FOR DATABASE MIGRATIONS<animate attributeName="opacity" values="0;1" dur="0.5s" begin="1.05s" fill="freeze"/></text>
+</svg>

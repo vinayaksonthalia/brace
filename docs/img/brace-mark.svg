@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240" role="img" aria-label="Brace mark">
+  <!-- BRACE mark — monochrome primary. Crash-test calibration disc; the signal
+       line runs through it: alive, silent gap at impact center, alive again. -->
+  <defs>
+    <clipPath id="d"><circle cx="120" cy="120" r="74"/></clipPath>
+  </defs>
+
+  <rect width="240" height="240" rx="48" fill="#0b0e14"/>
+
+  <g clip-path="url(#d)">
+    <rect x="46"  y="46"  width="74" height="74" fill="#e8edf4"/>
+    <rect x="120" y="46"  width="74" height="74" fill="#151a23"/>
+    <rect x="46"  y="120" width="74" height="74" fill="#151a23"/>
+    <rect x="120" y="120" width="74" height="74" fill="#e8edf4"/>
+  </g>
+  <circle cx="120" cy="120" r="74" fill="none" stroke="#e8edf4" stroke-width="3"/>
+
+  <g stroke="#e8edf4" stroke-width="5" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M 22 120 H 68 l 8 -22 l 10 44 l 8 -22 H 106"/>
+    <path d="M 134 120 H 218"/>
+  </g>
+  <g stroke="#e8edf4" stroke-width="2" opacity="0.55">
+    <line x1="106" y1="112" x2="106" y2="128"/>
+    <line x1="134" y1="112" x2="134" y2="128"/>
+  </g>
+</svg>
