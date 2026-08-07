@@ -803,17 +803,20 @@ func (s *Server) finishRun(runID, sql string, mode engine.Mode, out outcome) {
 			StartedAt: time.Now(),
 			Mode:      mode,
 			SQL:       sql,
-			Verdict:   engine.VerdictSafe,
-			// The synthetic result exists only so a waiting dashboard is not left
-			// hanging; EffectiveVerdict mirrors Verdict because nothing was
-			// measured and therefore nothing was projected.
-			EffectiveVerdict: engine.VerdictSafe,
+			// A rehearsal that never completed measured NOTHING, so it must never
+			// read as SAFE — a CI gate keying on this would wave an unmeasured
+			// migration into production. ERRORED is the honest terminal state and
+			// the gate treats it as non-safe (exit 2).
+			Verdict:          engine.VerdictErrored,
+			EffectiveVerdict: engine.VerdictErrored,
 			Casualties:       engine.Casualties{ByLabel: map[string]int64{}},
 			LockModes:        []string{},
-			Note:             "The rehearsal could not be completed, so nothing was measured.",
+			Note:             "The rehearsal could not be completed, so nothing was measured. Treat as not-yet-verified, never as safe.",
 		}
+		// Never surface the raw engine error (a wrapped pgx error can carry the
+		// admin host/user/db) to the public stream; log it, show a static line.
 		if out.err != nil {
-			res.Error = out.err.Error()
+			res.Error = "the rehearsal failed before it could be measured"
 		}
 		s.log.Error("api.run_failed", "run", runID, "err", out.err)
 	} else {
