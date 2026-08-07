@@ -1,0 +1,30 @@
+# Brace — production project on Zerops
+# Import: zcli project project-import ./import.yml
+# Code deploys via `zcli push` (see zerops.yml); the api seeds its own template on first boot.
+project:
+  name: brace
+  tags:
+    - zerops-challenge
+services:
+  - hostname: db
+    type: postgresql@16
+    mode: NON_HA
+    priority: 10                # up first
+    verticalAutoscaling:
+      cpuMode: DEDICATED        # the safe-run-stays-flat requirement (day-zero finding)
+      minCpu: 2
+      maxCpu: 3
+      minRam: 2
+      maxRam: 6
+      minDisk: 15               # template (873MB @10M rows) + warm twins + headroom (day-zero finding)
+      maxDisk: 25
+
+  - hostname: api
+    type: go@1
+    priority: 5
+    enableSubdomainAccess: true # direct API access for the deploy-gate + MCP callers
+
+  - hostname: web
+    type: static
+    priority: 1
+    enableSubdomainAccess: true # the public demo URL

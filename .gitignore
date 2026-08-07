@@ -19,3 +19,6 @@ dist/
 *.log
 tmp/
 scratch/
+
+# stray local build binary
+/brace
