@@ -456,6 +456,43 @@
   margin:var(--s5) 0 0; font-family:var(--sans); font-size:var(--t-lede); line-height:1.7; color:var(--ink-2); max-width:var(--prose);
 }
 
+/* ── BRING YOUR OWN DATA ──────────────────────────────────── */
+.byod{
+  margin:var(--s7) 0 0; padding:0; list-style:none;
+  display:grid; gap:var(--s5);
+}
+.byod__step{
+  display:grid; grid-template-columns:auto 1fr; gap:var(--s4);
+  align-items:start;
+  padding:var(--s5); border:1px solid var(--edge); border-radius:var(--r);
+  background:linear-gradient(180deg,var(--panel),var(--panel-deep));
+  box-shadow:var(--e1), var(--bezel);
+}
+.byod__n{
+  font-family:var(--mono); font-size:11px; font-weight:700;
+  letter-spacing:var(--track-label); color:var(--ink-3);
+  padding-top:2px;
+}
+.byod__body h3{
+  margin:0; font-family:var(--sans); font-size:var(--t-h3);
+  line-height:1.3; color:var(--ink);
+}
+.byod__body > p{
+  margin:var(--s3) 0 0; font-family:var(--sans); font-size:var(--t-body);
+  line-height:1.7; color:var(--ink-3); max-width:64ch;
+}
+.byod__body code{ font-family:var(--mono); font-size:12px; color:var(--ink-2); }
+.byod__code{
+  margin:var(--s4) 0 0; padding:var(--s4);
+  border:1px solid var(--edge); border-radius:var(--r-sm);
+  background:var(--panel-2);
+  overflow-x:auto;
+}
+.byod__code code{
+  font-family:var(--mono); font-size:12px; line-height:1.75;
+  color:var(--ink-2); white-space:pre; display:block;
+}
+
 /* ── CLOSE ────────────────────────────────────────────────── */
 .close{
   max-width:var(--measure); margin:clamp(72px,10vw,112px) auto 0;
@@ -509,6 +546,10 @@
   font-family:var(--mono); font-weight:700;
   font-size:clamp(5rem, 33vw, 26rem); line-height:.82;
   letter-spacing:-.045em; white-space:nowrap;
+  /* Once the clamp reaches its 26rem ceiling the word no longer spans the
+     viewport, so without this it hangs against the left gutter with dead
+     space beside it. Centred, it stays optically anchored at every width. */
+  text-align:center;
   transition-delay:260ms !important;
   transition-timing-function:var(--ease-strong);
 

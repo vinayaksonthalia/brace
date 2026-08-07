@@ -310,6 +310,50 @@ document.documentElement.setAttribute('data-theme',t);})();</script>
   <p class="selfhost reveal">Self-host it with one import file — your production data never leaves your infrastructure.</p>
 </section>
 
+<!-- ══ BRING YOUR OWN DATA ════════════════════════════════════
+     The self-host story's payoff. A synthetic table is a demo; the
+     migration you are actually afraid of runs against your schema.
+     Two environment variables, no fork, no recompile. -->
+<section class="sec sec--byod" data-sec="your data">
+  <header class="sec__head reveal">
+    <span class="eyebrow">bring your own data</span>
+    <h2>Rehearse against your schema, not ours.</h2>
+    <p class="sec__lede">The stock lab seeds ten million synthetic orders. That is a good demo and a weak rehearsal — your migration meets <em>your</em> indexes, <em>your</em> row widths and <em>your</em> traffic mix, and none of those are things a generated table can stand in for. A self-hosted Brace points at a restored production dump instead. Two environment variables. No fork, no recompile.</p>
+  </header>
+
+  <ol class="byod reveal">
+    <li class="byod__step">
+      <span class="byod__n">01</span>
+      <div class="byod__body">
+        <h3>Restore your dump as the template</h3>
+        <p>Every disposable twin is cloned from it.</p>
+        <pre class="byod__code"><code>createdb  -U &lt;superuser&gt; brace_template
+pg_restore -U &lt;superuser&gt; -d brace_template your-dump.dump</code></pre>
+      </div>
+    </li>
+    <li class="byod__step">
+      <span class="byod__n">02</span>
+      <div class="byod__body">
+        <h3>Turn seeding off and describe your traffic</h3>
+        <p>Each label is <code>name:weight:statement</code> — the write mix that runs against the twin while your migration executes.</p>
+        <pre class="byod__code"><code>BRACE_SEED: "off"
+BRACE_LOAD_LABELS: >-
+  checkout:3:INSERT INTO invoices (customer_id, cents) VALUES ($1, $2);
+  login:2:UPDATE sessions SET last_seen = now() WHERE id = $1 % 50 AND $2 > 0</code></pre>
+      </div>
+    </li>
+    <li class="byod__step">
+      <span class="byod__n">03</span>
+      <div class="byod__body">
+        <h3>Run the migration you are nervous about</h3>
+        <p>The casualty count is now measured against your real workload — and every statement is validated once at boot, so a typo is a named startup error, never a rehearsal whose numbers are quietly meaningless.</p>
+      </div>
+    </li>
+  </ol>
+
+  <p class="selfhost reveal">Brace runs inside your own infrastructure, so the dump never leaves it. The migration under test runs as <code>brace_migrator</code> and the load traffic as <code>brace_traffic</code> — both unprivileged, both owning nothing. <a href="https://github.com/vinayaksonthalia/brace/blob/main/docs/BYOD.md">Full walkthrough →</a></p>
+</section>
+
 <!-- ══ CLOSE ══════════════════════════════════════════════════ -->
 <section class="close reveal" data-sec="sign-off">
   <h2>Bring your own migration.</h2>
