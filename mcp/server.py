@@ -32,13 +32,27 @@ mcp = FastMCP(
 
 
 @mcp.tool
-def check_migration(sql: str, wait_seconds: int = 240) -> dict:
+def check_migration(sql: str, target_rows: int = 0, wait_seconds: int = 240) -> dict:
     """Crash-test a Postgres migration on a production-scale twin under live
-    write traffic. Returns verdict (SAFE / UNSAFE / INCONCLUSIVE), the measured
-    write-freeze duration, the count of writes that actually died (by label),
-    the lock modes taken, an explanation, and — when UNSAFE — the safe rewrite
-    to use instead. Nothing real is at risk: the twin is disposable."""
-    r = requests.post(f"{API}/api/run", json={"sql": sql, "mode": "custom"}, timeout=30)
+    write traffic. Returns effective_verdict (SAFE / UNSAFE / INCONCLUSIVE /
+    ERRORED) — the field to gate on — plus the measured write-freeze duration,
+    the count of writes that actually died (by label), the lock modes taken, an
+    explanation, and, when UNSAFE, the safe rewrite to use instead. Nothing real
+    is at risk: the twin is disposable.
+
+    target_rows: the row count of the table you will actually run this against.
+    The twin is a sample, and a freeze scales with table size — pass your real
+    number and the projection escalates a SAFE measurement to UNSAFE when it
+    would not be safe at your scale. Leave it 0 to skip projection.
+
+    ALWAYS gate on effective_verdict, never on verdict: verdict is only what was
+    measured on the twin, while effective_verdict also accounts for the
+    projection onto target_rows. A migration can be SAFE here and UNSAFE for you.
+    """
+    payload = {"sql": sql, "mode": "custom"}
+    if target_rows > 0:
+        payload["target_rows"] = target_rows
+    r = requests.post(f"{API}/api/run", json=payload, timeout=30)
     body = r.json()
     if r.status_code == 400:
         if body.get("kind") == "already_safe":
@@ -60,9 +74,14 @@ def check_migration(sql: str, wait_seconds: int = 240) -> dict:
             return {
                 k: lr.get(k)
                 for k in (
-                    "verdict", "blocked_seconds", "duration_seconds", "casualties",
-                    "baseline_writes_per_sec", "lock_modes", "explanation",
-                    "suggestion", "error", "invalid_indexes",
+                    # effective_verdict comes first because it is the one to gate
+                    # on: it is verdict escalated by the projection onto
+                    # target_rows, so it can be UNSAFE where verdict is SAFE.
+                    "effective_verdict", "verdict", "scale_projection",
+                    "scale_warning", "blocked_seconds", "duration_seconds",
+                    "casualties", "errored_total", "baseline_writes_per_sec",
+                    "lock_modes", "explanation", "suggestion", "error",
+                    "invalid_indexes",
                 )
             }
     return {"verdict": "TIMEOUT", "reason": f"crash test still running after {wait_seconds}s"}
