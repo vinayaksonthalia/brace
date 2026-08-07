@@ -223,6 +223,9 @@ func newLab(t *testing.T, prefix string, poolSize int) (*twins.Manager, *Engine)
 		AdminURL: appURL,
 		Twins:    mgr,
 		Workers:  12,
+		// The twin's real size, which is the denominator of every scale
+		// projection. Without it the engine correctly refuses to project.
+		TwinRows: templateRows,
 		// A tight request deadline, so a freeze of a few hundred milliseconds
 		// produces the casualties a production stack would suffer.
 		LockTimeout:      200 * time.Millisecond,
@@ -848,5 +851,115 @@ func TestLedgerSurvivesRestart(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("run %d is missing from a freshly opened ledger", res.LedgerID)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// The false-safe, end to end.
+// ---------------------------------------------------------------------------
+
+// TestScaleProjectionCatchesFalseSafe is the whole scale layer proved against a
+// real server rather than against arithmetic.
+//
+// The twin here holds 500,000 rows. A statement that finishes inside the
+// sampler's resolution on a table that size is reported — correctly — as SAFE:
+// nothing froze, nobody died, and that IS what happened here. The point is that
+// "here" is a sample. Told that the operator's real table is a thousand times
+// larger, the same measurement projects to a multi-second freeze, and the run
+// must come back SAFE-but-EffectiveVerdict-UNSAFE with a warning that says so
+// in numbers.
+//
+// Without this, Brace's answer to "is this migration safe?" would be "it was
+// safe on a table one thousandth the size of yours", presented as a green tick.
+func TestScaleProjectionCatchesFalseSafe(t *testing.T) {
+	_, eng := newLab(t, "scale", 1)
+	ctx := context.Background()
+
+	// SET NOT NULL on a column that is already NOT NULL: PostgreSQL takes
+	// ACCESS EXCLUSIVE and finishes immediately, because there is no scan left
+	// to do. Fast enough to measure SAFE on this twin, and classified
+	// set_not_null — a shape whose cost IS O(rows) in the general case, which is
+	// exactly the combination that produces a false safe.
+	const sql = `ALTER TABLE orders ALTER COLUMN customer_id SET NOT NULL`
+
+	// 1000x the twin. A statement that cost even one sample here costs minutes
+	// there.
+	const targetRows = int64(templateRows) * 1000
+
+	res, err := eng.Rehearse(ctx, sql, ModeCustom, WithTargetRows(targetRows))
+	if err != nil {
+		t.Fatalf("Rehearse: %v", err)
+	}
+	t.Logf("verdict=%s effective=%s blocked=%.3fs projected=%.3fs at_floor=%v twin_rows=%d target_rows=%d",
+		res.Verdict, res.EffectiveVerdict, res.BlockedSeconds,
+		res.ScaleProjection.ProjectedBlockedSeconds, res.ScaleProjection.MeasuredAtFloor,
+		res.ScaleProjection.TwinRows, res.ScaleProjection.TargetRows)
+
+	if res.Error != "" {
+		t.Fatalf("the migration itself failed: %s", res.Error)
+	}
+
+	// --- the measurement is untouched ---
+	if res.Verdict != VerdictSafe {
+		t.Fatalf("measured verdict = %s (blocked %.3fs), want SAFE — this statement does no work on this twin",
+			res.Verdict, res.BlockedSeconds)
+	}
+	if res.BlockedSeconds > unsafeThresholdSeconds {
+		t.Errorf("blocked_seconds = %.3f, want <= %.1f", res.BlockedSeconds, unsafeThresholdSeconds)
+	}
+
+	// --- the projection vetoes it ---
+	p := res.ScaleProjection
+	if !p.Known() {
+		t.Fatalf("no projection was made despite both row counts being known: %+v", p)
+	}
+	if p.TwinRows != templateRows {
+		t.Errorf("projection twin_rows = %d, want %d", p.TwinRows, int64(templateRows))
+	}
+	if p.TargetRows != targetRows {
+		t.Errorf("projection target_rows = %d, want %d", p.TargetRows, targetRows)
+	}
+	if p.Model == "" {
+		t.Error("the projection does not name its model")
+	}
+	if p.Verdict != VerdictUnsafe {
+		t.Errorf("projected verdict = %s (%.3fs), want UNSAFE at 1000x", p.Verdict, p.ProjectedBlockedSeconds)
+	}
+	if p.ProjectedBlockedSeconds <= res.BlockedSeconds {
+		t.Errorf("projection %.3fs is not larger than the measurement %.3fs at 1000x",
+			p.ProjectedBlockedSeconds, res.BlockedSeconds)
+	}
+
+	if res.EffectiveVerdict != VerdictUnsafe {
+		t.Errorf("effective_verdict = %s, want UNSAFE — a CI gate reading this would have shipped an outage",
+			res.EffectiveVerdict)
+	}
+	if res.ScaleWarning == "" {
+		t.Fatal("no scale warning on a SAFE-measured, UNSAFE-projected run")
+	}
+	for _, want := range []string{"SAFE on this", "Rehearse against a larger sample"} {
+		if !strings.Contains(res.ScaleWarning, want) {
+			t.Errorf("scale warning missing %q:\n%s", want, res.ScaleWarning)
+		}
+	}
+	if res.Note != res.ScaleWarning {
+		t.Errorf("the run's note should BE the scale warning when one exists;\nnote:    %s\nwarning: %s",
+			res.Note, res.ScaleWarning)
+	}
+
+	// --- and without a stated size, we say nothing rather than something false ---
+	res2, err := eng.Rehearse(ctx, sql, ModeCustom)
+	if err != nil {
+		t.Fatalf("Rehearse (no target): %v", err)
+	}
+	if res2.ScaleProjection.Known() {
+		t.Errorf("a projection was made with no target size: %+v", res2.ScaleProjection)
+	}
+	if res2.EffectiveVerdict != res2.Verdict {
+		t.Errorf("effective_verdict = %s with no projection, want the measured %s",
+			res2.EffectiveVerdict, res2.Verdict)
+	}
+	if res2.ScaleWarning != "" {
+		t.Errorf("scale warning with no target size: %s", res2.ScaleWarning)
 	}
 }

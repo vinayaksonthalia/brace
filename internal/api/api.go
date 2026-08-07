@@ -627,6 +627,12 @@ func (s *Server) reportByID(ctx context.Context, id int64) (*engine.RunRecord, e
 type runRequest struct {
 	SQL  string `json:"sql"`
 	Mode string `json:"mode"`
+	// TargetRows lets a caller ask "what about MY table?": the run is measured
+	// on the twin as always, and the result additionally carries a projection
+	// onto this many rows. Absent, zero, negative or absurd (> 1e12) values are
+	// ignored silently and the deployment's BRACE_TARGET_ROWS stands — a
+	// mistyped row count must never cost somebody a rehearsal.
+	TargetRows int64 `json:"target_rows,omitempty"`
 }
 
 type outcome struct {
@@ -705,8 +711,9 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	// with the request would leave a twin under load.
 	resCh := make(chan outcome, 1)
 	sql := req.SQL
+	targetRows := req.TargetRows
 	go func() {
-		res, err := eng.Rehearse(s.runCtx, sql, mode)
+		res, err := eng.Rehearse(s.runCtx, sql, mode, engine.WithTargetRows(targetRows))
 		resCh <- outcome{res: res, err: err}
 	}()
 
@@ -792,14 +799,18 @@ func (s *Server) finishRun(runID, sql string, mode engine.Mode, out outcome) {
 	res := out.res
 	if res == nil {
 		res = &engine.RunResult{
-			RunID:      runID,
-			StartedAt:  time.Now(),
-			Mode:       mode,
-			SQL:        sql,
-			Verdict:    engine.VerdictSafe,
-			Casualties: engine.Casualties{ByLabel: map[string]int64{}},
-			LockModes:  []string{},
-			Note:       "The rehearsal could not be completed, so nothing was measured.",
+			RunID:     runID,
+			StartedAt: time.Now(),
+			Mode:      mode,
+			SQL:       sql,
+			Verdict:   engine.VerdictSafe,
+			// The synthetic result exists only so a waiting dashboard is not left
+			// hanging; EffectiveVerdict mirrors Verdict because nothing was
+			// measured and therefore nothing was projected.
+			EffectiveVerdict: engine.VerdictSafe,
+			Casualties:       engine.Casualties{ByLabel: map[string]int64{}},
+			LockModes:        []string{},
+			Note:             "The rehearsal could not be completed, so nothing was measured.",
 		}
 		if out.err != nil {
 			res.Error = out.err.Error()

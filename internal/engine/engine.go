@@ -143,6 +143,16 @@ type Config struct {
 	// CloneETA is how long a twin clone takes on this deployment; it is only
 	// used to give a 503 an honest-ish "come back in N seconds". Defaults to 45s.
 	CloneETA time.Duration
+	// TwinRows is how many rows the seeded template — and therefore every twin —
+	// actually holds. It is not used to run anything; it is the denominator of
+	// the scale projection, which is the only thing standing between a
+	// measurement taken on a sample and a false SAFE about a table fifty times
+	// bigger. 0 means the deployment did not tell us, and no projection is made.
+	TwinRows int64
+	// DefaultTargetRows is the operator's production row count from
+	// BRACE_TARGET_ROWS: "my real orders table has 500,000,000 rows". Every run
+	// is projected onto it unless the caller overrides it per-run. 0 = unset.
+	DefaultTargetRows int64
 	// MaxRunDuration bounds the whole measured rehearsal (everything after the
 	// twin is acquired, up to and including the recovery observation). A run that
 	// exceeds it is aborted — the migration is cancelled, load is stopped, the
@@ -201,6 +211,10 @@ type RunResult struct {
 	SQL       string    `json:"sql"`
 
 	// --- the frozen contract ---
+	// Verdict is the MEASURED verdict and nothing else: what this twin, at this
+	// size, actually did. It is deliberately never adjusted by the projection —
+	// the dashboard is coded against it, and more importantly a measurement that
+	// silently absorbs a model stops being a measurement.
 	Verdict         string     `json:"verdict"`
 	BlockedSeconds  float64    `json:"blocked_seconds"`
 	Casualties      Casualties `json:"casualties"`
@@ -208,6 +222,20 @@ type RunResult struct {
 	// Error is the migration's own failure, if it failed. A non-empty Error
 	// with a nil Go error means "the run completed and the migration did not".
 	Error string `json:"error,omitempty"`
+
+	// --- the scale layer (additive; see scale.go) ---
+	// EffectiveVerdict is the verdict to gate a deploy on: the worse of the
+	// measured verdict and the projected one. When no target size was supplied
+	// it is identical to Verdict. It can turn SAFE into UNSAFE and never the
+	// reverse.
+	EffectiveVerdict string `json:"effective_verdict"`
+	// ScaleProjection is what this migration is modelled to cost at the
+	// operator's real table size. Modelled, not measured — the distinction is
+	// the point, and Model names the assumption.
+	ScaleProjection ScaleProjection `json:"scale_projection"`
+	// ScaleWarning is non-empty exactly when the twin said SAFE and the
+	// projection says UNSAFE: the false-safe this whole layer exists to catch.
+	ScaleWarning string `json:"scale_warning,omitempty"`
 
 	// --- the teach layer ---
 	Classification Classification `json:"classification"`
@@ -459,7 +487,17 @@ func (e *Engine) setPhase(phase string) {
 //
 // A migration that fails on the server is NOT one of these: it comes back as a
 // (*RunResult, nil) with RunResult.Error set.
-func (e *Engine) Rehearse(ctx context.Context, sql string, mode Mode) (*RunResult, error) {
+//
+// Options are the per-run overrides — today only WithTargetRows. They are
+// variadic so that adding one never breaks a caller, and so the common case
+// (Rehearse(ctx, sql, mode)) still reads as one line.
+func (e *Engine) Rehearse(ctx context.Context, sql string, mode Mode, opts ...RunOption) (*RunResult, error) {
+	ro := runOptions{TargetRows: e.cfg.DefaultTargetRows}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&ro)
+		}
+	}
 	mode, err := mode.normalize()
 	if err != nil {
 		return nil, err
@@ -516,12 +554,34 @@ func (e *Engine) Rehearse(ctx context.Context, sql string, mode Mode) (*RunResul
 	e.log.Info("engine.run_started", "run", runID, "twin", twin.Name, "mode", mode,
 		"classification", as.Classification)
 
-	return e.runOn(ctx, twin, as, mode, state)
+	return e.runOn(ctx, twin, as, mode, state, ro)
+}
+
+// RunOption is a per-run override.
+type RunOption func(*runOptions)
+
+type runOptions struct {
+	// TargetRows is the operator's production row count for THIS run, defaulting
+	// to Config.DefaultTargetRows. An invalid value is dropped rather than
+	// rejected: the projection is an extra, and refusing to rehearse a migration
+	// because a row count was mistyped would be the wrong trade.
+	TargetRows int64
+}
+
+// WithTargetRows answers "what about MY table?" for one run. Non-positive or
+// absurd values (> 1e12) are ignored, leaving whatever the deployment's
+// BRACE_TARGET_ROWS said.
+func WithTargetRows(n int64) RunOption {
+	return func(o *runOptions) {
+		if v := validTargetRows(n); v > 0 {
+			o.TargetRows = v
+		}
+	}
 }
 
 // runOn is the measured part of a run: everything after the twin exists and
 // before it is destroyed.
-func (e *Engine) runOn(ctx context.Context, twin *twins.Twin, as *Assessment, mode Mode, state *RunState) (*RunResult, error) {
+func (e *Engine) runOn(ctx context.Context, twin *twins.Twin, as *Assessment, mode Mode, state *RunState, ro runOptions) (*RunResult, error) {
 	res := &RunResult{
 		RunID:          state.RunID,
 		StartedAt:      state.StartedAt,
@@ -708,7 +768,7 @@ func (e *Engine) runOn(ctx context.Context, twin *twins.Twin, as *Assessment, mo
 	// 9. The verdict.
 	res.Timeline = smp.points()
 	res.BlockedSeconds = blockedSecondsFrom(res.Timeline, res.DDLStartT, baseline)
-	res.Verdict = verdictFor(res.BlockedSeconds)
+	res.Verdict = verdictFor(res.BlockedSeconds, res.Casualties.Total)
 	if res.Error != "" && !guarded {
 		// Postgres refused the statement: nothing was measured, so no SAFE/UNSAFE
 		// claim is honest here. See VerdictErrored.
@@ -732,10 +792,29 @@ func (e *Engine) runOn(ctx context.Context, twin *twins.Twin, as *Assessment, mo
 	}
 	res.Casualties = casualtiesFrom(final)
 	res.ErroredTotal = final.ErroredTotal
+
+	// 10. The scale layer. The twin is a SAMPLE, and a freeze measured on a
+	// sample is not the freeze production gets: lock presence is scale-free, lock
+	// duration is not. Verdict above stays exactly what was measured;
+	// EffectiveVerdict is what a deploy gate should read.
+	res.ScaleProjection = projectScale(scaleInputs{
+		Measured:       res.BlockedSeconds,
+		TwinRows:       e.cfg.TwinRows,
+		TargetRows:     ro.TargetRows,
+		ScalesWithRows: as.Lesson.ScalesWithRows,
+		BlocksWrites:   as.Lesson.BlocksWrites,
+		Verdict:        res.Verdict,
+	})
+	res.EffectiveVerdict = effectiveVerdict(res.Verdict, res.ScaleProjection)
+	res.ScaleWarning = scaleWarning(res.Verdict, res.ScaleProjection)
+
 	res.Note = noteFor(res, as, monReport)
 
 	e.log.Info("engine.run_finished",
 		"run", state.RunID, "twin", twin.Name, "verdict", res.Verdict,
+		"effective_verdict", res.EffectiveVerdict,
+		"projected_blocked_s", res.ScaleProjection.ProjectedBlockedSeconds,
+		"target_rows", res.ScaleProjection.TargetRows,
 		"blocked_s", res.BlockedSeconds, "monitor_blocked_s", res.MonitorBlockedSeconds,
 		"casualties", res.Casualties.Total, "errored", res.ErroredTotal,
 		"duration_s", res.DurationSeconds, "lock_modes", res.LockModes,
@@ -791,9 +870,15 @@ func noteFor(res *RunResult, as *Assessment, mon monitor.Report) string {
 	case res.Verdict == VerdictUnsafe && !as.Lesson.BlocksWrites:
 		return "This statement blocked writes even though its shape usually does not. Worth reading the timeline " +
 			"rather than trusting the pattern."
+	case res.ScaleWarning != "":
+		// Placed above the generic "on a larger table it is held for longer"
+		// hand-wave below: when the operator has told us their real size we can
+		// say how much longer, with a number, and that sentence is the note.
+		return res.ScaleWarning
 	case res.Verdict == VerdictSafe && as.Lesson.BlocksWrites && res.Casualties.Total == 0:
 		return "No freeze was measured, but this shape does take a blocking lock — on this twin the statement " +
-			"finished faster than the write traffic could notice. On a larger table the same lock is held for longer."
+			"finished faster than the write traffic could notice. On a larger table the same lock is held for longer. " +
+			"Set BRACE_TARGET_ROWS (or pass target_rows) and Brace will project this measurement onto your real size."
 	case mon.Degraded():
 		return "The lock monitor lost some samples, so its figures are a floor. The write-rate measurement is " +
 			"unaffected."

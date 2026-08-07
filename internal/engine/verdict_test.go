@@ -95,7 +95,7 @@ func TestVerdictThreshold(t *testing.T) {
 		{12.5, VerdictUnsafe},
 	}
 	for _, c := range cases {
-		if got := verdictFor(c.blocked); got != c.want {
+		if got := verdictFor(c.blocked, 0); got != c.want {
 			t.Errorf("verdictFor(%v) = %s, want %s", c.blocked, got, c.want)
 		}
 	}

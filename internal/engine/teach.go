@@ -52,6 +52,20 @@ type Lesson struct {
 	// statement touches catalog rows only. The API uses this to answer "this
 	// one's already safe" instead of burning a twin on it.
 	TriviallySafe bool `json:"trivially_safe"`
+	// ScalesWithRows says the work this shape does is O(rows): an index build, a
+	// table rewrite, a validation scan. It is what makes a measurement taken on
+	// a sample extrapolable to a production table — and, just as importantly,
+	// what makes extrapolation ILLEGITIMATE when it is false. A catalog-only
+	// ADD COLUMN takes the same microseconds at ten million rows and at five
+	// hundred million, so scaling its measurement by 50x would manufacture an
+	// outage that cannot happen. See scale.go.
+	//
+	// Note this is about the DURATION of the lock, not its presence: a shape can
+	// take ACCESS EXCLUSIVE and still not scale (ALTER INDEX ... RENAME), and a
+	// shape can scale without blocking writes at all (VALIDATE CONSTRAINT,
+	// CREATE INDEX CONCURRENTLY) — where the growing cost is wall-clock and I/O
+	// rather than a freeze.
+	ScalesWithRows bool `json:"scales_with_rows"`
 	// Explanation is the teach text: which lock, who waits, why the safe form
 	// differs. One short paragraph, technically accurate.
 	Explanation string `json:"explanation"`
@@ -63,9 +77,10 @@ type Lesson struct {
 // with a non-empty Explanation — TestTeachMapIsComplete enforces it.
 var lessons = map[Classification]Lesson{
 	ClassCreateIndex: {
-		Title:        "CREATE INDEX",
-		ExpectedLock: "ShareLock",
-		BlocksWrites: true,
+		Title:          "CREATE INDEX",
+		ExpectedLock:   "ShareLock",
+		BlocksWrites:   true,
+		ScalesWithRows: true,
 		Explanation: "A plain CREATE INDEX takes a SHARE lock on the table and holds it for the entire build. " +
 			"SHARE conflicts with ROW EXCLUSIVE, which is the lock every INSERT, UPDATE and DELETE takes — so for as " +
 			"long as the index is building, every write queues, and any write with a lock_timeout or a request deadline " +
@@ -74,9 +89,10 @@ var lessons = map[Classification]Lesson{
 		Suggestion: "CREATE INDEX CONCURRENTLY",
 	},
 	ClassCreateIndexConcurrently: {
-		Title:        "CREATE INDEX CONCURRENTLY",
-		ExpectedLock: "ShareUpdateExclusiveLock",
-		BlocksWrites: false,
+		Title:          "CREATE INDEX CONCURRENTLY",
+		ExpectedLock:   "ShareUpdateExclusiveLock",
+		BlocksWrites:   false,
+		ScalesWithRows: true,
 		Explanation: "CONCURRENTLY takes only SHARE UPDATE EXCLUSIVE, which does not conflict with the ROW EXCLUSIVE " +
 			"lock writes take — so writes keep committing throughout. It pays for that with two table passes plus a wait " +
 			"for every transaction older than the build, so it takes longer and cannot run inside a transaction block. " +
@@ -85,9 +101,10 @@ var lessons = map[Classification]Lesson{
 			"recoverable annoyance, not an outage.",
 	},
 	ClassDropIndex: {
-		Title:        "DROP INDEX",
-		ExpectedLock: "AccessExclusiveLock",
-		BlocksWrites: true,
+		Title:          "DROP INDEX",
+		ExpectedLock:   "AccessExclusiveLock",
+		BlocksWrites:   true,
+		ScalesWithRows: false,
 		Explanation: "DROP INDEX takes ACCESS EXCLUSIVE on the parent table. The drop itself is fast — it is a catalog " +
 			"update plus unlinking files — but ACCESS EXCLUSIVE conflicts with everything, including SELECT, so it must " +
 			"wait for every in-flight statement on the table to finish before it can start. On a busy table that wait is " +
@@ -96,36 +113,40 @@ var lessons = map[Classification]Lesson{
 		Suggestion: "DROP INDEX CONCURRENTLY",
 	},
 	ClassDropIndexConcurrently: {
-		Title:        "DROP INDEX CONCURRENTLY",
-		ExpectedLock: "ShareUpdateExclusiveLock",
-		BlocksWrites: false,
+		Title:          "DROP INDEX CONCURRENTLY",
+		ExpectedLock:   "ShareUpdateExclusiveLock",
+		BlocksWrites:   false,
+		ScalesWithRows: false,
 		Explanation: "DROP INDEX CONCURRENTLY marks the index dead, waits for every transaction that could still be " +
 			"using it, and only then removes it — holding SHARE UPDATE EXCLUSIVE rather than ACCESS EXCLUSIVE, so reads " +
 			"and writes carry on. It is slower in wall-clock terms and cannot run in a transaction block, which is a " +
 			"trade almost every production system should take.",
 	},
 	ClassReindex: {
-		Title:        "REINDEX",
-		ExpectedLock: "AccessExclusiveLock",
-		BlocksWrites: true,
+		Title:          "REINDEX",
+		ExpectedLock:   "AccessExclusiveLock",
+		BlocksWrites:   true,
+		ScalesWithRows: true,
 		Explanation: "A plain REINDEX rebuilds the index in place under an ACCESS EXCLUSIVE lock on the index and a " +
 			"SHARE lock on the table, so writes are blocked for the whole rebuild and, for REINDEX TABLE, reads too. " +
 			"REINDEX CONCURRENTLY builds a replacement alongside the original and swaps it in, keeping traffic alive.",
 		Suggestion: "REINDEX INDEX CONCURRENTLY",
 	},
 	ClassReindexConcurrently: {
-		Title:        "REINDEX CONCURRENTLY",
-		ExpectedLock: "ShareUpdateExclusiveLock",
-		BlocksWrites: false,
+		Title:          "REINDEX CONCURRENTLY",
+		ExpectedLock:   "ShareUpdateExclusiveLock",
+		BlocksWrites:   false,
+		ScalesWithRows: true,
 		Explanation: "REINDEX CONCURRENTLY (PostgreSQL 12+) builds a fresh copy of the index under SHARE UPDATE " +
 			"EXCLUSIVE, then swaps it for the old one under a brief ACCESS EXCLUSIVE that lasts a catalog update rather " +
 			"than a rebuild. Writes keep flowing; a failure can leave an INVALID leftover index, which is cleaned up " +
 			"with DROP INDEX.",
 	},
 	ClassAlterColumnType: {
-		Title:        "ALTER TABLE ... ALTER COLUMN ... TYPE",
-		ExpectedLock: "AccessExclusiveLock",
-		BlocksWrites: true,
+		Title:          "ALTER TABLE ... ALTER COLUMN ... TYPE",
+		ExpectedLock:   "AccessExclusiveLock",
+		BlocksWrites:   true,
+		ScalesWithRows: true,
 		Explanation: "Changing a column's type takes ACCESS EXCLUSIVE and, in almost every case, rewrites the entire " +
 			"table plus every index on it. ACCESS EXCLUSIVE conflicts with every other lock mode, so reads AND writes " +
 			"stop for the full duration of that rewrite — minutes or hours on a large table. The safe pattern is to add " +
@@ -133,19 +154,21 @@ var lessons = map[Classification]Lesson{
 		Suggestion: "ALTER TABLE t ADD COLUMN new_col <type>;  -- then backfill in batches, sync, and rename",
 	},
 	ClassAddColumnConstDefault: {
-		Title:         "ALTER TABLE ... ADD COLUMN (constant or no default)",
-		ExpectedLock:  "AccessExclusiveLock",
-		BlocksWrites:  false,
-		TriviallySafe: true,
+		Title:          "ALTER TABLE ... ADD COLUMN (constant or no default)",
+		ExpectedLock:   "AccessExclusiveLock",
+		BlocksWrites:   false,
+		ScalesWithRows: false,
+		TriviallySafe:  true,
 		Explanation: "Since PostgreSQL 11 a new column with a constant default is a catalog-only change: the default is " +
 			"stored as the column's \"missing value\" and existing rows are never touched. The statement still takes " +
 			"ACCESS EXCLUSIVE, but only for the microseconds it takes to write a catalog row — the risk is not the lock " +
 			"itself, it is waiting to GET the lock behind a long-running query. There is nothing here for Brace to crash.",
 	},
 	ClassAddColumnVolatile: {
-		Title:        "ALTER TABLE ... ADD COLUMN with a volatile DEFAULT",
-		ExpectedLock: "AccessExclusiveLock",
-		BlocksWrites: true,
+		Title:          "ALTER TABLE ... ADD COLUMN with a volatile DEFAULT",
+		ExpectedLock:   "AccessExclusiveLock",
+		BlocksWrites:   true,
+		ScalesWithRows: true,
 		Explanation: "The PostgreSQL 11 fast path only applies to a default that is constant. A volatile default — " +
 			"now(), random(), gen_random_uuid(), nextval() — has to produce a different value per row, so the whole " +
 			"table is rewritten under ACCESS EXCLUSIVE, blocking reads and writes for the duration. The same is true " +
@@ -155,9 +178,10 @@ var lessons = map[Classification]Lesson{
 		Suggestion: "ALTER TABLE t ADD COLUMN c <type>;  -- backfill in batches, then ALTER COLUMN c SET DEFAULT ...",
 	},
 	ClassAddConstraint: {
-		Title:        "ALTER TABLE ... ADD CONSTRAINT",
-		ExpectedLock: "AccessExclusiveLock",
-		BlocksWrites: true,
+		Title:          "ALTER TABLE ... ADD CONSTRAINT",
+		ExpectedLock:   "AccessExclusiveLock",
+		BlocksWrites:   true,
+		ScalesWithRows: true,
 		Explanation: "Adding a CHECK or FOREIGN KEY constraint the ordinary way takes ACCESS EXCLUSIVE (and, for a " +
 			"foreign key, a lock on the referenced table too) and holds it while every existing row is validated. " +
 			"UNIQUE and PRIMARY KEY are worse still: they build an index under that same lock. The safe path is two " +
@@ -166,9 +190,10 @@ var lessons = map[Classification]Lesson{
 		Suggestion: "ALTER TABLE t ADD CONSTRAINT c ... NOT VALID;  -- then: ALTER TABLE t VALIDATE CONSTRAINT c;",
 	},
 	ClassAddConstraintNotValid: {
-		Title:        "ALTER TABLE ... ADD CONSTRAINT ... NOT VALID",
-		ExpectedLock: "AccessExclusiveLock",
-		BlocksWrites: false,
+		Title:          "ALTER TABLE ... ADD CONSTRAINT ... NOT VALID",
+		ExpectedLock:   "AccessExclusiveLock",
+		BlocksWrites:   false,
+		ScalesWithRows: false,
 		Explanation: "NOT VALID is the first half of the safe two-step: the constraint is recorded and enforced for new " +
 			"and updated rows, but existing rows are not scanned, so the ACCESS EXCLUSIVE lock is held for a catalog " +
 			"write rather than a table scan. Finish with VALIDATE CONSTRAINT, which takes the weaker SHARE UPDATE " +
@@ -176,17 +201,19 @@ var lessons = map[Classification]Lesson{
 		Suggestion: "ALTER TABLE t VALIDATE CONSTRAINT c;",
 	},
 	ClassValidateConstraint: {
-		Title:        "ALTER TABLE ... VALIDATE CONSTRAINT",
-		ExpectedLock: "ShareUpdateExclusiveLock",
-		BlocksWrites: false,
+		Title:          "ALTER TABLE ... VALIDATE CONSTRAINT",
+		ExpectedLock:   "ShareUpdateExclusiveLock",
+		BlocksWrites:   false,
+		ScalesWithRows: true,
 		Explanation: "VALIDATE CONSTRAINT is the second half of the safe two-step. It scans the whole table to prove " +
 			"the existing rows satisfy a NOT VALID constraint, but it does so under SHARE UPDATE EXCLUSIVE, which does " +
 			"not conflict with the ROW EXCLUSIVE lock writes take. The scan can be long; nobody is blocked while it runs.",
 	},
 	ClassSetNotNull: {
-		Title:        "ALTER TABLE ... SET NOT NULL",
-		ExpectedLock: "AccessExclusiveLock",
-		BlocksWrites: true,
+		Title:          "ALTER TABLE ... SET NOT NULL",
+		ExpectedLock:   "AccessExclusiveLock",
+		BlocksWrites:   true,
+		ScalesWithRows: true,
 		Explanation: "SET NOT NULL takes ACCESS EXCLUSIVE and scans every row to prove none is null, blocking reads and " +
 			"writes for the length of that scan. Since PostgreSQL 12 the scan is skipped when an existing, already " +
 			"validated CHECK (col IS NOT NULL) constraint proves the same thing — so the safe path is to add that CHECK " +
@@ -194,26 +221,29 @@ var lessons = map[Classification]Lesson{
 		Suggestion: "ALTER TABLE t ADD CONSTRAINT c CHECK (col IS NOT NULL) NOT VALID;  -- VALIDATE, then SET NOT NULL",
 	},
 	ClassAlterTableOther: {
-		Title:        "ALTER TABLE",
-		ExpectedLock: "AccessExclusiveLock",
-		BlocksWrites: true,
+		Title:          "ALTER TABLE",
+		ExpectedLock:   "AccessExclusiveLock",
+		BlocksWrites:   true,
+		ScalesWithRows: true,
 		Explanation: "Most forms of ALTER TABLE take ACCESS EXCLUSIVE, the strongest lock PostgreSQL has: it conflicts " +
 			"with every other mode, so reads and writes both stop. Whether that is a blip or an outage depends entirely " +
 			"on whether the statement also rewrites the table — which is exactly the thing that is hard to predict from " +
 			"the SQL, and exactly what this rehearsal measures.",
 	},
 	ClassAlterIndex: {
-		Title:        "ALTER INDEX",
-		ExpectedLock: "AccessExclusiveLock",
-		BlocksWrites: true,
+		Title:          "ALTER INDEX",
+		ExpectedLock:   "AccessExclusiveLock",
+		BlocksWrites:   true,
+		ScalesWithRows: false,
 		Explanation: "ALTER INDEX takes ACCESS EXCLUSIVE on the index. Renames and storage-parameter changes are " +
 			"catalog-only and finish in microseconds, so the real risk is the wait to acquire the lock behind in-flight " +
 			"queries — while that request is queued, new statements queue behind it.",
 	},
 	ClassVacuumFull: {
-		Title:        "VACUUM FULL",
-		ExpectedLock: "AccessExclusiveLock",
-		BlocksWrites: true,
+		Title:          "VACUUM FULL",
+		ExpectedLock:   "AccessExclusiveLock",
+		BlocksWrites:   true,
+		ScalesWithRows: true,
 		Explanation: "VACUUM FULL rewrites the entire table into a fresh file under ACCESS EXCLUSIVE. Reads and writes " +
 			"are blocked for the whole rewrite, and it needs enough free disk for a second copy of the table. Plain " +
 			"VACUUM reclaims space for reuse under SHARE UPDATE EXCLUSIVE without blocking anybody; it does not return " +
@@ -221,32 +251,36 @@ var lessons = map[Classification]Lesson{
 		Suggestion: "VACUUM (ANALYZE) t;",
 	},
 	ClassVacuum: {
-		Title:        "VACUUM",
-		ExpectedLock: "ShareUpdateExclusiveLock",
-		BlocksWrites: false,
+		Title:          "VACUUM",
+		ExpectedLock:   "ShareUpdateExclusiveLock",
+		BlocksWrites:   false,
+		ScalesWithRows: true,
 		Explanation: "Plain VACUUM takes SHARE UPDATE EXCLUSIVE, which does not conflict with reads or writes — traffic " +
 			"continues throughout. It competes for I/O rather than for locks, so the visible cost is a shallow dip in " +
 			"throughput, not a freeze. Only one VACUUM at a time may run on a given table.",
 	},
 	ClassAnalyze: {
-		Title:         "ANALYZE",
-		ExpectedLock:  "ShareUpdateExclusiveLock",
-		BlocksWrites:  false,
-		TriviallySafe: true,
+		Title:          "ANALYZE",
+		ExpectedLock:   "ShareUpdateExclusiveLock",
+		BlocksWrites:   false,
+		ScalesWithRows: false,
+		TriviallySafe:  true,
 		Explanation: "ANALYZE samples rows to refresh the planner's statistics under SHARE UPDATE EXCLUSIVE, which does " +
 			"not conflict with reads or writes. It is one of the few things you can run on a hot table at any hour " +
 			"without thinking about it.",
 	},
 	ClassComment: {
-		Title:         "COMMENT ON",
-		BlocksWrites:  false,
-		TriviallySafe: true,
+		Title:          "COMMENT ON",
+		BlocksWrites:   false,
+		ScalesWithRows: false,
+		TriviallySafe:  true,
 		Explanation: "COMMENT ON writes a single row of documentation into the catalog and touches no table data. It " +
 			"holds a lock on the commented object only long enough for that catalog write.",
 	},
 	ClassGeneric: {
-		Title:        "Unrecognised migration",
-		BlocksWrites: true,
+		Title:          "Unrecognised migration",
+		BlocksWrites:   true,
+		ScalesWithRows: true,
 		Explanation: "Brace does not recognise this statement's shape, so it has no prediction to offer — which is " +
 			"precisely when a rehearsal is worth the most. The twin will tell you what lock it takes and what it costs " +
 			"live traffic, and the verdict below is measured, not guessed.",

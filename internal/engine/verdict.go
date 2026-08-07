@@ -112,8 +112,19 @@ func blockedSecondsFrom(points []RatePoint, ddlStartT, baselineWPS float64) floa
 }
 
 // verdictFor is the single place SAFE and UNSAFE are decided.
-func verdictFor(blockedSeconds float64) string {
-	if blockedSeconds > unsafeThresholdSeconds {
+//
+// Two independent grounds for UNSAFE, because either one alone can miss a real
+// outage:
+//
+//   - The freeze exceeded the threshold. This is the headline measurement.
+//   - Real writes DIED. A write that waited past its lock_timeout and was
+//     killed is not a statistic about the twin; it is the same event that, in
+//     production, is a customer seeing an error. A statement that kills writes
+//     cannot be SAFE no matter how the freeze rounds — and a freeze landing a
+//     hair under the threshold (1.000s against a 1s bar) is exactly where a
+//     duration-only rule would call a genuine outage safe.
+func verdictFor(blockedSeconds float64, casualties int64) string {
+	if blockedSeconds > unsafeThresholdSeconds || casualties > 0 {
 		return VerdictUnsafe
 	}
 	return VerdictSafe

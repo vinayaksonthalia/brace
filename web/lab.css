@@ -175,9 +175,19 @@ main{
 .chamber .rail-scale{ padding-bottom:var(--s3); }
 
 /* ── THE STRIP ────────────────────────────────────────────── */
+/* These tiles are the running live totals since the page opened — a
+   different number from the crash report's per-run figures below, so
+   the two must never look like they are disagreeing on the same
+   question. This eyebrow says which question this strip answers. */
+.strip__eyebrow{
+  margin:0; padding:var(--s2) var(--gut) 0;
+  font-size:9px; font-weight:500; letter-spacing:var(--track-eyebrow);
+  text-transform:uppercase; color:var(--ink-3);
+  border-top:1px solid var(--edge);
+}
+.strip__eyebrow span{ text-transform:none; letter-spacing:0; opacity:.7; }
 .strip{
   display:grid; grid-template-columns:repeat(4,1fr);
-  border-top:1px solid var(--edge);
 }
 .lab{
   padding:var(--s3) var(--gut); border-left:1px solid var(--edge);
@@ -257,6 +267,13 @@ main{
   margin:0; font-size:var(--t-label); font-weight:600; letter-spacing:var(--track-eyebrow);
   text-transform:uppercase; color:var(--ink); white-space:nowrap;
 }
+/* names which question this card answers, so it never reads as
+   contradicting the live-traffic strip above it */
+.panel__scope{
+  font-weight:500; color:var(--amber); margin-left:var(--s2);
+  padding:2px 6px; border:1px solid var(--amber-dim); border-radius:var(--r-pill);
+  font-size:9px; letter-spacing:.1em; vertical-align:middle;
+}
 .panel__note{
   font-size:9.5px; letter-spacing:.13em; text-transform:uppercase; color:var(--ink-3);
   text-align:right; min-width:0;
@@ -302,6 +319,7 @@ main{
   border:1px solid var(--green); border-radius:var(--r-sm);
   background:var(--run-bg);
   color:var(--green);
+  min-height:44px;
   padding:var(--s3) var(--s5); font-size:12px; font-weight:600; letter-spacing:var(--track-label); text-transform:uppercase;
   display:flex; align-items:center; justify-content:center; gap:var(--s2);
   transition:background var(--t-fast) var(--ease), color var(--t-fast) var(--ease),
@@ -343,6 +361,7 @@ main{
    the same monospace the console writes SQL in. Clicking it hands
    you the curl — the whole lab is reachable without this page. */
 .cmd{
+  position:relative;
   flex:none; cursor:pointer; font-family:var(--mono);
   display:inline-flex; align-items:center; gap:7px;
   padding:7px 11px; border:1px solid var(--edge); border-radius:var(--r-sm);
@@ -350,6 +369,11 @@ main{
   font-size:10px; letter-spacing:.1em; white-space:nowrap;
   transition:border-color var(--t-fast) var(--ease), color var(--t-fast) var(--ease),
     background var(--t-fast) var(--ease);
+}
+/* the visible chip stays compact; the tappable area doesn't */
+.cmd::before{
+  content:""; position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+  width:max(100%,44px); height:44px;
 }
 .cmd:hover{ background:var(--panel-2-hover); border-color:var(--edge-hot); color:var(--ink-2); }
 .cmd:active{ background:var(--panel-2-pressed); }

@@ -59,6 +59,13 @@ type Config struct {
 	WebDir   string
 	Logger   *slog.Logger
 
+	// TargetRows is BRACE_TARGET_ROWS: the operator's statement of how many rows
+	// their REAL table has. The twin is a sample, and a freeze measured on a
+	// sample is not the freeze production gets — this is the number that lets
+	// Brace say "0.2s here means ~10s on yours" instead of shipping a false SAFE.
+	// 0 (the default) means unstated, and no projection is made.
+	TargetRows int64
+
 	// Seed is false in bring-your-own-data mode (BRACE_SEED=off, or
 	// SEED_ROWS=0). The template is then whatever a human restored into
 	// brace_template, and boot verifies it instead of writing to it.
@@ -84,6 +91,11 @@ func FromEnv() (Config, error) {
 		WebDir:   envOr("BRACE_WEB_DIR", ""),
 		Seed:     true,
 	}
+
+	// BRACE_TARGET_ROWS is optional and deliberately forgiving: a garbled value
+	// costs the deployment its scale projection, not its startup. It is logged
+	// as unset either way by the caller.
+	c.TargetRows = int64(envInt("BRACE_TARGET_ROWS", 0))
 
 	// Bring-your-own-data. Both knobs are resolved before anything touches the
 	// database, so a malformed value is a startup error and never a half-seeded
@@ -232,12 +244,25 @@ func Open(ctx context.Context, cfg Config, phase Phase) (*Lab, error) {
 		}
 	}
 
+	// TwinRows is the template's ACTUAL row count as measured a moment ago, not
+	// cfg.SeedRows: a reused template within the 10% tolerance, or a restored
+	// BYOD dump, is whatever size it is, and the projection's denominator has to
+	// be the truth rather than the intent.
+	if cfg.TargetRows > 0 && stats.Rows > 0 {
+		log.Info("boot.scale_projection", "twin_rows", stats.Rows, "target_rows", cfg.TargetRows,
+			"ratio", float64(cfg.TargetRows)/float64(stats.Rows))
+	} else if cfg.TargetRows == 0 {
+		log.Info("boot.scale_projection_disabled", "twin_rows", stats.Rows,
+			"note", "set BRACE_TARGET_ROWS to your production table's row count to have runs projected onto it")
+	}
 	eng, err := engine.New(ctx, engine.Config{
-		AdminURL: cfg.AdminURL,
-		Twins:    mgr,
-		Workers:  cfg.Workers,
-		Labels:   cfg.Labels,
-		Logger:   log,
+		AdminURL:          cfg.AdminURL,
+		Twins:             mgr,
+		Workers:           cfg.Workers,
+		Labels:            cfg.Labels,
+		TwinRows:          stats.Rows,
+		DefaultTargetRows: cfg.TargetRows,
+		Logger:            log,
 	})
 	if err != nil {
 		lab.Close(context.WithoutCancel(ctx))

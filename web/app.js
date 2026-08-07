@@ -484,15 +484,22 @@ const API = window.BRACE_API_BASE || (/^web-[^.]+\./.test(location.host)
   /* One place decides how every control and label reads in each state,
      so the arc can never half-apply itself. */
   var STATES = {
-    idle:    { run: 'Run the crash test', hint: 'Ctrl↵ to run',            chamber: 'chamber nominal' },
-    running: { run: 'Crash in progress',  hint: 'the twin is under load',  chamber: 'rig armed' },
-    crash:   { run: 'Crash in progress',  hint: 'writes are frozen',       chamber: 'writes frozen' }
+    idle:    { run: 'Run the crash test',   hint: 'Ctrl↵ to run',            chamber: 'chamber nominal',
+               desc: 'Nominal: no migration is running — the twin\'s write traffic is steady.' },
+    running: { run: 'Crash in progress',    hint: 'the twin is under load',  chamber: 'rig armed',
+               desc: 'Armed: the migration is running against the twin — the crash-test dummy database, not production.' },
+    crash:   { run: 'Crash in progress',    hint: 'writes are frozen',       chamber: 'writes frozen',
+               desc: 'The migration has taken a blocking lock: writes to the twin are frozen right now.' },
+    // No warm twin yet — say that, not "run", so the button never
+    // contradicts the "preparing the next dummy" card underneath it.
+    prep:    { run: 'Waiting for a dummy…', hint: 'a twin is warming',       chamber: 'chamber nominal',
+               desc: 'Nominal: no migration is running — the twin\'s write traffic is steady.' }
   };
 
   function setState(s) {
     state = s;
     el.root.dataset.state = s;
-    var busy = (s === 'running' || s === 'crash');
+    var busy = (s === 'running' || s === 'crash' || s === 'prep');
     var copy = STATES[s] || STATES.idle;
     el.runBtn.disabled = busy;
     el.sql.disabled = busy;
@@ -500,6 +507,7 @@ const API = window.BRACE_API_BASE || (/^web-[^.]+\./.test(location.host)
     el.runText.textContent = copy.run;
     el.runHint.textContent = copy.hint;
     el.chamberState.textContent = copy.chamber;
+    el.chamberState.title = copy.desc;
   }
 
   /* ── the big number eases toward each 1 Hz sample ───────── */
@@ -872,6 +880,7 @@ const API = window.BRACE_API_BASE || (/^web-[^.]+\./.test(location.host)
         clearInterval(t);
         span.textContent = '0';
         card.querySelector('.card__title').textContent = 'Twin ready — run it again';
+        if (state === 'prep') setState('idle');
       }
       refreshStatus();
     }, 1000);
@@ -978,7 +987,13 @@ const API = window.BRACE_API_BASE || (/^web-[^.]+\./.test(location.host)
       setState('idle');
       if (err.status === 400) showRejected(body);
       else if (err.status === 409) { showSimple('tpl-busy'); el.reportNote.textContent = 'rig busy'; }
-      else if (err.status === 503) showPreparing(body.eta_seconds);
+      else if (err.status === 503) { setState('prep'); showPreparing(body.eta_seconds); }
+      else if (err.status === 429) {
+        // Rate-limited, not unreachable: the rig answered. Honest
+        // diagnostics means this never wears the "lab offline" card.
+        showSimple('tpl-ratelimited', null, body.reason ? body.reason : null);
+        el.reportNote.textContent = 'rate limited';
+      }
       else {
         showSimple('tpl-error', 'Can\'t reach the rig',
           'The API did not answer' + (body.reason ? ' (' + body.reason + ')' : '') +

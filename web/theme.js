@@ -30,7 +30,7 @@
     var next = dark ? 'light' : 'dark';
     btn.setAttribute('aria-label', 'Switch to ' + next + ' theme');
     btn.setAttribute('title', 'Switch to ' + next + ' theme');
-    btn.setAttribute('aria-pressed', String(!dark));
+    btn.setAttribute('aria-pressed', String(dark));
     var label = btn.querySelector('.chip__t');
     if (label) label.textContent = next;
   }

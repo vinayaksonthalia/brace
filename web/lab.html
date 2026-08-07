@@ -28,6 +28,7 @@ document.documentElement.setAttribute('data-theme',t);})();</script>
 <!-- ══ TOP RAIL ═══════════════════════════════════════════════ -->
 <header class="rail">
   <div class="rail__brand">
+<h1 class="sr">Brace — the lab</h1>
 <svg class="mark mark--live" viewBox="44 44 152 152" aria-hidden="true">
       <defs><clipPath id="mk"><circle cx="120" cy="120" r="74"/></clipPath></defs>
       <g clip-path="url(#mk)">
@@ -86,7 +87,7 @@ document.documentElement.setAttribute('data-theme',t);})();</script>
 
   <div class="chamber__head">
     <div class="gauge">
-      <h1 class="gauge__label">writes / sec</h1>
+      <h2 class="gauge__label">writes / sec</h2>
       <div class="gauge__value" id="wps" aria-live="off">0</div>
       <!-- Until the first stats frame lands there is no number to show, so
            the instrument says what it is doing instead of reading zero. -->
@@ -98,7 +99,7 @@ document.documentElement.setAttribute('data-theme',t);})();</script>
     <div class="impact" id="impact">
       <div class="impact__idle">
         <span class="statuslamp" aria-hidden="true"></span>
-        <span id="chamberState">chamber nominal</span>
+        <span id="chamberState" title="Nominal: no migration is running — the twin's write traffic is steady.">chamber nominal</span>
       </div>
       <div class="impact__live">
         <span class="impact__label">impact</span>
@@ -118,6 +119,7 @@ document.documentElement.setAttribute('data-theme',t);})();</script>
     <b>−60s</b><b>−45</b><b>−30</b><b>−15</b><b class="rail-scale__now">now</b>
   </div>
 
+  <p class="strip__eyebrow">live traffic — right now <span>· not the run below</span></p>
   <div class="strip" id="labels">
     <div class="lab" data-label="checkout"><b>checkout</b><span class="lab__ok">0</span><span class="lab__died">0 died</span>
       <span class="await await--lab" aria-hidden="true"><i class="await__dot"></i>awaiting run</span></div>
@@ -176,7 +178,7 @@ document.documentElement.setAttribute('data-theme',t);})();</script>
   <!-- REPORT -->
   <section class="panel report" aria-label="Crash report">
     <header class="panel__head">
-      <h2>crash report</h2>
+      <h2>crash report <span class="panel__scope">this run</span></h2>
       <span class="panel__note" id="reportNote">awaiting run</span>
     </header>
     <div class="report__body" id="reportBody" aria-live="polite">
@@ -289,6 +291,16 @@ document.documentElement.setAttribute('data-theme',t);})();</script>
     <div class="card__verdict"><span class="tag tag--amber">lab offline</span></div>
     <h3 class="card__title" data-slot="title">Can't reach the rig</h3>
     <p class="card__text" data-slot="reason"></p>
+  </article>
+</template>
+
+<!-- A 429 is not "unreachable" — the rig answered, it just said not yet.
+     Its own card, so it never gets mistaken for a genuine outage. -->
+<template id="tpl-ratelimited">
+  <article class="card card--note">
+    <div class="card__verdict"><span class="tag tag--amber">paced</span></div>
+    <h3 class="card__title" data-slot="title">Too many runs from this address</h3>
+    <p class="card__text" data-slot="reason">The lab paces requests per visitor. Try again in a moment.</p>
   </article>
 </template>
 

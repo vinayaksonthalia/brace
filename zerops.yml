@@ -17,6 +17,52 @@
 # rather than anything checked into git. If those references are absent the
 # process falls back to composing the DSN from superUser/superUserPassword and
 # the hostname `db` — see internal/boot.FromEnv.
+#
+# ---------------------------------------------------------------------------
+# Bring your own data
+#
+# The stock lab seeds a synthetic ten-million-row `orders` table. That is a good
+# demo and a weak rehearsal: the migration you are actually afraid of runs
+# against YOUR schema, at YOUR row widths, under YOUR traffic. Two environment
+# variables point a self-hosted deployment at a restored production dump
+# instead — no fork, no recompile. Full walkthrough in docs/BYOD.md.
+#
+#   BRACE_SEED: "off"
+#       Skip seeding entirely. `brace_template` is then whatever you restored
+#       into it, and boot verifies it exists and has user tables rather than
+#       writing to it. SEED_ROWS: "0" means the same thing.
+#       If the template is missing, the process refuses to start and prints the
+#       createdb/pg_restore recipe. (You do NOT need to set ALLOW_CONNECTIONS —
+#       Brace pins the template to false itself on every start.)
+#
+#   BRACE_LOAD_LABELS: "name:weight:statement;name:weight:statement"
+#       The traffic mix run against every twin, replacing the built-in one.
+#       Only the first two colons in each entry are structural, so a statement
+#       may contain colons; it may NOT contain a semicolon. Every statement is
+#       run with exactly two bound bigints, so it must use both $1 and $2 —
+#       PostgreSQL rejects a bind with more parameters than the statement
+#       declares, so a $1-only statement would fail on every single write.
+#       At boot each statement is executed once against a throwaway twin, so a
+#       typo'd table name is a named startup error rather than a rehearsal whose
+#       casualty count is quietly meaningless. Look for `byod.labels_validated`.
+#       That self-check also runs when BRACE_SEED=off and this variable is NOT
+#       set, because the built-in mix writes to `orders` — a table a restored
+#       dump probably does not have. In practice the two variables travel
+#       together.
+#
+# Example (uncomment and adapt under envVariables below):
+#
+#   BRACE_SEED: "off"
+#   BRACE_LOAD_LABELS: >-
+#     checkout:3:INSERT INTO invoices (customer_id, cents) VALUES ($1, $2);
+#     login:2:UPDATE sessions SET last_seen = now() WHERE id = $1 % 50 AND $2 > 0
+#
+# Security note: these statements are executed by the lab against a disposable
+# clone, under lock_timeout, on the load pool's own connections. The migration
+# under test is the only thing that runs as `brace_migrator`, which is
+# NOSUPERUSER and owns nothing outside the twin. Anyone who can set these
+# variables already controls the deployment.
+# ---------------------------------------------------------------------------
 
 zerops:
   - setup: api
