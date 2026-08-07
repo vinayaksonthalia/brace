@@ -86,6 +86,12 @@ const (
 	// minPrefixLen keeps the namespace specific enough that it cannot plausibly
 	// shadow an unrelated database. The sweep drops everything matching it.
 	minPrefixLen = 6
+
+	// namespaceLockWait bounds how long a starting Manager waits for a previous
+	// instance to release the namespace advisory lock. Sized for a rolling
+	// redeploy handover (the outgoing container is terminated within tens of
+	// seconds); beyond it, a stuck holder becomes a clear startup failure.
+	namespaceLockWait = 90 * time.Second
 )
 
 // Twin is a live throwaway database. It is owned by the caller between Acquire
@@ -111,6 +117,11 @@ type Config struct {
 	NamePrefix string
 	// Logger receives lifecycle events. Defaults to slog.Default().
 	Logger *slog.Logger
+
+	// NamespaceLockWait bounds how long NewManager waits for a previous instance
+	// to release the namespace advisory lock (a rolling-redeploy handover).
+	// Defaults to namespaceLockWait (90s). Tests set it short.
+	NamespaceLockWait time.Duration
 }
 
 // PoolStatus is a point-in-time snapshot for the HTTP status endpoint.
@@ -171,6 +182,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.NamePrefix == "" {
 		c.NamePrefix = defaultNamePrefix
+	}
+	if c.NamespaceLockWait <= 0 {
+		c.NamespaceLockWait = namespaceLockWait
 	}
 	if c.Logger == nil {
 		c.Logger = slog.Default()
@@ -305,16 +319,45 @@ func (m *Manager) acquireNamespaceLock(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("twins: acquire namespace lock connection: %w", err)
 	}
-	var got bool
-	if err := conn.QueryRow(ctx, `SELECT pg_try_advisory_lock($1)`, m.nsLockKey).Scan(&got); err != nil {
-		conn.Release()
-		return fmt.Errorf("twins: claim namespace %q: %w", m.cfg.NamePrefix, err)
-	}
-	if !got {
-		conn.Release()
-		return fmt.Errorf("%w: NamePrefix %q (advisory lock %d) — refusing to start, because the "+
-			"startup orphan sweep would destroy the live twins of the manager that holds it",
-			ErrNamespaceHeld, m.cfg.NamePrefix, m.nsLockKey)
+	// Retry with backoff rather than failing on the first miss. On a rolling
+	// redeploy the outgoing container still holds this session-level lock for
+	// the seconds it takes the platform to terminate it; a fresh instance must
+	// WAIT for that handover, not quit. Waiting is safe because we never sweep
+	// or clone until the lock is ours. Bounded so a genuinely stuck holder
+	// still surfaces as a clear failure instead of hanging forever.
+	deadline := time.Now().Add(m.cfg.NamespaceLockWait)
+	backoff := 500 * time.Millisecond
+	for attempt := 1; ; attempt++ {
+		var got bool
+		err := conn.QueryRow(ctx, `SELECT pg_try_advisory_lock($1)`, m.nsLockKey).Scan(&got)
+		if err != nil {
+			conn.Release()
+			return fmt.Errorf("twins: claim namespace %q: %w", m.cfg.NamePrefix, err)
+		}
+		if got {
+			break
+		}
+		if time.Now().After(deadline) {
+			conn.Release()
+			return fmt.Errorf("%w: NamePrefix %q (advisory lock %d) — waited %s for the previous "+
+				"instance to release it and it did not; refusing to start, because the startup "+
+				"orphan sweep would destroy the live twins of the manager that holds it",
+				ErrNamespaceHeld, m.cfg.NamePrefix, m.nsLockKey, m.cfg.NamespaceLockWait)
+		}
+		if attempt == 1 {
+			m.log.Info("twin.namespace_waiting",
+				"prefix", m.cfg.NamePrefix, "lock_key", m.nsLockKey,
+				"reason", "another instance still holds it (likely a redeploy overlap); waiting for handover")
+		}
+		select {
+		case <-ctx.Done():
+			conn.Release()
+			return ctx.Err()
+		case <-time.After(backoff):
+		}
+		if backoff < 3*time.Second {
+			backoff *= 2
+		}
 	}
 	// Hijack rather than hold a checked-out pool connection: a session-level
 	// lock must never be able to travel back into the pool and be handed to an

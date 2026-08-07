@@ -496,6 +496,10 @@ func TestSecondManagerOnSameNamespaceIsRefused(t *testing.T) {
 			PoolSize:     2,
 			NamePrefix:   splitPrefix,
 			Logger:       testLogger(t),
+			// A held namespace now means "wait for a redeploy handover" — bound
+			// it short here so the second boot resolves to ErrNamespaceHeld
+			// quickly instead of waiting the 90s production default.
+			NamespaceLockWait: 2 * time.Second,
 		})
 	}
 
