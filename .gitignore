@@ -22,3 +22,7 @@ scratch/
 
 # stray local build binary
 /brace
+
+# python
+__pycache__/
+*.pyc
