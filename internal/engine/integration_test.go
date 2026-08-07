@@ -80,6 +80,7 @@ func TestMain(m *testing.M) {
 			fmt.Fprintf(os.Stderr, "post-test sweep failed: %v\n", err)
 		}
 		_, _ = c.Exec(bg, `DROP ROLE IF EXISTS `+DefaultMigratorRole)
+		_, _ = c.Exec(bg, `DROP ROLE IF EXISTS `+DefaultTrafficRole)
 		c.Close(bg)
 	}
 	os.Exit(code)

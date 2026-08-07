@@ -140,6 +140,11 @@ type Config struct {
 	// MigratorRole is the unprivileged role migrations run as.
 	// Defaults to brace_migrator.
 	MigratorRole string
+	// TrafficRole is the unprivileged role the load generator's write traffic
+	// runs as. It is what keeps a migration-installed CHECK/trigger/DEFAULT/index
+	// expression from firing as a superuser when live traffic writes a row.
+	// Defaults to brace_traffic.
+	TrafficRole string
 	// CloneETA is how long a twin clone takes on this deployment; it is only
 	// used to give a 503 an honest-ish "come back in N seconds". Defaults to 45s.
 	CloneETA time.Duration
@@ -181,6 +186,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.MigratorRole == "" {
 		c.MigratorRole = DefaultMigratorRole
+	}
+	if c.TrafficRole == "" {
+		c.TrafficRole = DefaultTrafficRole
 	}
 	if c.CloneETA <= 0 {
 		c.CloneETA = defaultCloneETA
@@ -289,6 +297,9 @@ type Status struct {
 	// scale to draw before the first run of a session finishes.
 	LastBaselineWPS int64  `json:"baseline_writes_per_sec"`
 	MigratorRole    string `json:"migrator_role"`
+	// TrafficRole is the unprivileged role the load traffic writes as, surfaced
+	// for observability so an operator can confirm the writes are not superuser.
+	TrafficRole string `json:"traffic_role"`
 }
 
 // run phases, in order.
@@ -313,6 +324,9 @@ type Engine struct {
 	// migratorPassword exists only in this process's memory. It is never
 	// logged, never stored, and is rotated on every startup.
 	migratorPassword string
+	// trafficPassword is the load-traffic role's password. Same discipline as
+	// migratorPassword: memory-only, never logged, rotated on every startup.
+	trafficPassword string
 
 	mu           sync.Mutex
 	running      bool
@@ -355,6 +369,11 @@ func New(ctx context.Context, cfg Config) (*Engine, error) {
 		pool.Close()
 		return nil, err
 	}
+	trafficPassword, err := generatePassword()
+	if err != nil {
+		pool.Close()
+		return nil, err
+	}
 
 	e := &Engine{
 		cfg:              cfg,
@@ -362,8 +381,18 @@ func New(ctx context.Context, cfg Config) (*Engine, error) {
 		pool:             pool,
 		ledger:           NewLedger(pool),
 		migratorPassword: password,
+		trafficPassword:  trafficPassword,
 	}
-	if err := ensureMigratorRole(ctx, pool, cfg.MigratorRole, password); err != nil {
+	// Both unprivileged roles are (re-)secured on every startup with a fresh
+	// password. The migrator runs the DDL under test; the traffic role runs the
+	// load generator's writes. NEITHER is superuser, which is what makes any
+	// expression a migration installs (CHECK/trigger/DEFAULT/index) harmless when
+	// live traffic fires it. See migrate.go's package boundary note.
+	if err := ensureRole(ctx, pool, cfg.MigratorRole, password); err != nil {
+		pool.Close()
+		return nil, err
+	}
+	if err := ensureRole(ctx, pool, cfg.TrafficRole, trafficPassword); err != nil {
 		pool.Close()
 		return nil, err
 	}
@@ -375,8 +404,8 @@ func New(ctx context.Context, cfg Config) (*Engine, error) {
 	if len(cfg.Labels) > 0 {
 		labelSource = "custom"
 	}
-	e.log.Info("engine.ready", "migrator_role", cfg.MigratorRole, "workers", cfg.Workers,
-		"labels", labelSource, "label_count", len(cfg.Labels))
+	e.log.Info("engine.ready", "migrator_role", cfg.MigratorRole, "traffic_role", cfg.TrafficRole,
+		"workers", cfg.Workers, "labels", labelSource, "label_count", len(cfg.Labels))
 	return e, nil
 }
 
@@ -401,6 +430,7 @@ func (e *Engine) Status() Status {
 		Running:         e.running,
 		LastBaselineWPS: e.lastBaseline,
 		MigratorRole:    e.cfg.MigratorRole,
+		TrafficRole:     e.cfg.TrafficRole,
 	}
 	if e.cur != nil {
 		cp := *e.cur
@@ -608,19 +638,34 @@ func (e *Engine) runOn(ctx context.Context, twin *twins.Twin, as *Assessment, mo
 		return ctx.Err() == nil && errors.Is(runCtx.Err(), context.DeadlineExceeded)
 	}
 
-	// 3. Twin-local privileges for the unprivileged migrator role.
+	// 3. Twin-local privileges for the two unprivileged roles: the migrator (which
+	// runs the DDL) and the traffic role (which runs the load writes). Both are
+	// granted here, from the twin's admin DSN, because object-level grants must be
+	// issued inside the database that owns the objects.
 	e.setPhase(phaseGranting)
 	grantCtx, cancelGrant := context.WithTimeout(runCtx, grantTimeout)
 	err := grantOnTwin(grantCtx, twin.DSN, twin.Name, e.cfg.MigratorRole)
+	if err == nil {
+		err = grantTrafficOnTwin(grantCtx, twin.DSN, twin.Name, e.cfg.TrafficRole)
+	}
 	cancelGrant()
 	if err != nil {
 		return nil, err
 	}
 
-	// 4. Live traffic.
+	// 4. Live traffic — run as the UNPRIVILEGED traffic role, never the admin DSN.
+	// This is the privilege-escalation fix: the writes fire any CHECK/trigger/
+	// DEFAULT/index expression the migration installs, and running them as a
+	// NOSUPERUSER role is what makes PostgreSQL deny pg_read_file() and report
+	// is_superuser='off' inside those expressions. The monitor and the migrator
+	// connection keep using twin.DSN — they legitimately need it.
+	trafDSN, err := trafficDSN(twin.DSN, e.cfg.TrafficRole, e.trafficPassword)
+	if err != nil {
+		return nil, fmt.Errorf("engine: derive traffic DSN: %w", err)
+	}
 	e.setPhase(phaseWarming)
 	gen, err := loadgen.New(runCtx, loadgen.Config{
-		DSN:         twin.DSN,
+		DSN:         trafDSN,
 		Workers:     e.cfg.Workers,
 		LockTimeout: e.cfg.LockTimeout,
 		Labels:      e.cfg.Labels,

@@ -46,6 +46,10 @@ const (
 	// compiled and run in parallel by `go test ./...`.
 	migratorRole = "brace_api_migrator"
 
+	// trafficRole is likewise distinct from engine.DefaultTrafficRole so the two
+	// packages' suites do not fight over the same role while running in parallel.
+	trafficRole = "brace_api_traffic"
+
 	// templateRows is enough that a plain CREATE INDEX is measurable and small
 	// enough that cloning it is not the slowest part of the suite.
 	templateRows = 300_000
@@ -231,6 +235,7 @@ func newLab(t *testing.T, prefix string, poolSize int) *lab {
 		Twins:            mgr,
 		Workers:          12,
 		MigratorRole:     migratorRole,
+		TrafficRole:      trafficRole,
 		LockTimeout:      200 * time.Millisecond,
 		SettleDuration:   1500 * time.Millisecond,
 		RecoveryDuration: time.Second,

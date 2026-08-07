@@ -17,8 +17,8 @@ two environment variables and no code changes.
 
 Import the project (`import.yml`) or deploy the `api` setup from `zerops.yml`.
 Brace needs a PostgreSQL 16 service it **owns**: it creates and drops databases
-on every run, and it rotates the `brace_migrator` role's password on every start.
-Do not point it at a server anything else depends on.
+on every run, and it rotates the `brace_migrator` and `brace_traffic` role
+passwords on every start. Do not point it at a server anything else depends on.
 
 ### 2. Restore your dump as `brace_template`
 
@@ -155,21 +155,40 @@ before you hand it your production schema.
   `REINDEX` and `VACUUM` are owner-only in PostgreSQL. The twin is destroyed
   minutes later. It runs with `statement_timeout = 0` and `lock_timeout = 0`, so
   a slow migration is measured rather than truncated.
-- **Your `BRACE_LOAD_LABELS` statements** run on the load generator's pool, which
-  connects with the lab's own admin DSN and sets `lock_timeout` (default 1500ms)
-  and deliberately no `statement_timeout` — that is what lets a blocked write be
-  counted as a casualty (SQLSTATE 55P03) while a merely slow one is not. They
-  are therefore **privileged inside the twin**, and they are configuration, not
-  user input: anyone who can set this variable already controls the deployment.
-  Nothing on the public HTTP surface can change them.
+- **Your `BRACE_LOAD_LABELS` statements** run on the load generator's pool as
+  `brace_traffic`: a second LOGIN role that is `NOSUPERUSER NOCREATEDB
+  NOCREATEROLE NOREPLICATION NOBYPASSRLS`, with its own random password generated
+  at startup and held only in process memory. Inside each twin it is granted the
+  least privilege the load needs and nothing more — `USAGE` on schema `public`
+  and `SELECT, INSERT, UPDATE` on the existing public tables (never `DELETE`,
+  `TRUNCATE`, `CREATE`, or ownership), plus the sequence `USAGE` an INSERT into a
+  serial column needs. The pool sets `lock_timeout` (default 1500ms) and
+  deliberately no `statement_timeout` — that is what lets a blocked write be
+  counted as a casualty (SQLSTATE 55P03) while a merely slow one is not.
+
+  This is a security boundary, not a convenience. A CHECK constraint, trigger,
+  column DEFAULT or index expression is evaluated as the session that performs
+  the **write**, not the one that installed it — so if the writes ran as a
+  superuser (as they once did, over the admin DSN), an allow-listed migration
+  that smuggled `pg_read_file()` or `current_setting('is_superuser')` into such
+  an expression would fire it as superuser the moment traffic touched a row.
+  Running the writes as unprivileged `brace_traffic` makes PostgreSQL itself deny
+  those expressions. `brace_migrator` (which owns objects on the twin) is also
+  `NOSUPERUSER`, so even a `SECURITY DEFINER` function — which runs as its owner
+  — cannot reach superuser either. Both roles being non-superuser is what closes
+  both paths. The role name is reported as `traffic_role` on `/status`.
+
+  Your label statements are configuration, not user input: anyone who can set
+  `BRACE_LOAD_LABELS` already controls the deployment, and nothing on the public
+  HTTP surface can change them.
 - **Everything happens on a disposable clone.** Your restored `brace_template` is
   never written to — with `BRACE_SEED=off`, boot only reads its catalog — and
   every run gets a fresh twin that is dropped when the run ends.
 
 Two operational facts that follow from the design: exactly one Brace process may
-run against a given PostgreSQL server (a second would rotate the migrator
-password out from under the first), and one rehearsal runs at a time (two would
-measure each other's I/O as their own migration's cost).
+run against a given PostgreSQL server (a second would rotate the `brace_migrator`
+and `brace_traffic` passwords out from under the first), and one rehearsal runs
+at a time (two would measure each other's I/O as their own migration's cost).
 
 ---
 

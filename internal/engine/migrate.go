@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -40,10 +41,50 @@ import (
 // require ownership rather than a grantable privilege. Ownership of a database
 // that is destroyed at the end of the run — and that contains nothing but
 // generated rows — costs nothing. It confers no power over the server.
+//
+// The SECOND role, and the one this file grew to add:
+//
+// The load generator writes rows too, and for the same reason it also cannot be
+// allowed anywhere near superuser. A CHECK constraint, trigger, column DEFAULT
+// or index expression is evaluated in the context of the session that performs
+// the write — NOT the session that installed it. So an allow-listed migration
+// that smuggles current_setting('is_superuser') or pg_read_file() into such an
+// expression fires that expression, as whoever the writer is, the instant live
+// traffic touches a row. When the load generator connected with the twin's admin
+// (superuser) DSN — as it originally did — that meant arbitrary file reads and a
+// superuser oracle reachable from the public endpoint. Proven live by an
+// auditor:
+//
+//	ALTER TABLE orders ADD CONSTRAINT c CHECK (current_setting('is_superuser') = 'on') NOT VALID;
+//
+// never failed an INSERT, because the INSERT ran as a superuser.
+//
+// The fix is symmetric with the migrator: brace_traffic is a LOGIN role that is
+// NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS, with its own
+// rotated random password, granted ONLY SELECT/INSERT/UPDATE on the twin's
+// existing public tables (never DELETE, TRUNCATE, ownership, or CREATE) plus the
+// sequence USAGE an INSERT into a serial column needs. The load generator uses
+// it instead of the admin DSN. Now the writer is unprivileged, so PostgreSQL
+// itself denies pg_read_file() and returns 'off' for is_superuser inside any
+// expression the migration installed.
+//
+// The one bypass worth ruling out is SECURITY DEFINER: a function runs as its
+// OWNER, so a definer function owned by a superuser would re-open the hole. It
+// cannot arise here. The only role that can create functions on the twin is
+// brace_migrator (the traffic role has no CREATE anywhere), and a function it
+// creates is owned by brace_migrator — itself NOSUPERUSER. Both roles being
+// non-superuser is what closes BOTH paths: the writer's own privileges, and any
+// definer function reachable from a write. Neither reaches superuser.
 
 const (
 	// DefaultMigratorRole is the role every migration runs as.
 	DefaultMigratorRole = "brace_migrator"
+
+	// DefaultTrafficRole is the unprivileged role the load generator's write
+	// traffic runs as. It exists so that a CHECK/trigger/DEFAULT/index expression
+	// installed by the migration under test fires as an unprivileged writer, not
+	// as a superuser. See the package boundary note above.
+	DefaultTrafficRole = "brace_traffic"
 
 	// MigrationAppName is the application_name the migration connection sets.
 	// The lock monitor keys on it to find the migration's backend.
@@ -70,8 +111,11 @@ func generatePassword() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(b[:]), nil
 }
 
-// ensureMigratorRole creates or re-secures the migrator role on the server and
-// sets its password to a freshly generated one.
+// ensureRole creates or re-secures one of Brace's unprivileged LOGIN roles on
+// the server and sets its password to a freshly generated one. Both the
+// migrator (brace_migrator) and the load-traffic role (brace_traffic) are
+// brought up this way: identical safe attributes, a password only this process
+// holds.
 //
 // It runs on every startup and always re-issues ALTER ROLE, so a role left
 // behind by a previous deploy — possibly with a password somebody else knows,
@@ -80,16 +124,16 @@ func generatePassword() (string, error) {
 //
 // The consequence, and it is deliberate: exactly ONE Brace process may run
 // against a given PostgreSQL server. A second one would rotate the password out
-// from under the first, whose next migration connection would fail to
-// authenticate. Brace is a single-tenant lab that owns its server — the twin
+// from under the first, whose next connection as one of these roles would fail
+// to authenticate. Brace is a single-tenant lab that owns its server — the twin
 // pool already assumes that — so this is a property, not a limitation. If it
-// ever needs to be multi-process, give each process its own role name.
-func ensureMigratorRole(ctx context.Context, pool *pgxpool.Pool, role, password string) error {
+// ever needs to be multi-process, give each process its own role names.
+func ensureRole(ctx context.Context, pool *pgxpool.Pool, role, password string) error {
 	if !safeIdent.MatchString(role) {
-		return fmt.Errorf("engine: migrator role %q must match %s", role, safeIdent)
+		return fmt.Errorf("engine: role %q must match %s", role, safeIdent)
 	}
 	if !safePassword.MatchString(password) {
-		return fmt.Errorf("engine: generated migrator password has an unexpected shape")
+		return fmt.Errorf("engine: generated password for role %q has an unexpected shape", role)
 	}
 	q := pgx.Identifier{role}.Sanitize()
 	lit := "'" + password + "'"
@@ -172,6 +216,87 @@ func grantOnTwin(ctx context.Context, twinDSN, twinName, role string) error {
 		}
 	}
 	return nil
+}
+
+// grantTrafficOnTwin gives the load-traffic role the LEAST privilege the labeled
+// write statements need inside one twin, and nothing else. Idempotent — it runs
+// once per acquired twin and every statement is safe to repeat.
+//
+// What it grants, and what it deliberately does not:
+//   - USAGE on schema public and SELECT, INSERT, UPDATE on the existing tables:
+//     enough to model customer reads and writes.
+//   - USAGE, SELECT on sequences: an INSERT into a serial/identity column calls
+//     nextval(), which needs USAGE on the owning sequence.
+//   - NO DELETE, NO TRUNCATE — the load never destroys rows.
+//   - NO CREATE on the schema, NO ownership of anything — the traffic role must
+//     not be able to create or alter objects, only write into them.
+//
+// Everything more dangerous (reading files, COPY … PROGRAM, DROP, reaching
+// another database) is refused by PostgreSQL itself because the role is
+// NOSUPERUSER and owns nothing — the same server-enforced boundary the migrator
+// relies on, not a regex.
+//
+// The grants are issued over the twin's own (superuser) admin DSN, because
+// object-level grants must come from inside the database that owns the objects,
+// and a superuser can grant on tables regardless of which role owns them.
+func grantTrafficOnTwin(ctx context.Context, twinDSN, twinName, role string) error {
+	if !safeIdent.MatchString(role) {
+		return fmt.Errorf("engine: traffic role %q must match %s", role, safeIdent)
+	}
+	conn, err := pgx.Connect(ctx, twinDSN)
+	if err != nil {
+		return fmt.Errorf("engine: connect twin for traffic grants: %w", err)
+	}
+	defer func() {
+		closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		_ = conn.Close(closeCtx)
+		cancel()
+	}()
+
+	qRole := pgx.Identifier{role}.Sanitize()
+	qDB := pgx.Identifier{twinName}.Sanitize()
+
+	stmts := []string{
+		`GRANT CONNECT ON DATABASE ` + qDB + ` TO ` + qRole,
+		// USAGE only — never CREATE. The traffic role must not be able to place a
+		// new relation, function, or any other object in the schema.
+		`GRANT USAGE ON SCHEMA public TO ` + qRole,
+		// SELECT/INSERT/UPDATE only. No DELETE, no TRUNCATE, no ownership: the load
+		// generator writes rows, it does not change the schema or remove data.
+		`GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA public TO ` + qRole,
+		// nextval()/currval() on a serial or identity column's sequence.
+		`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO ` + qRole,
+	}
+	for _, s := range stmts {
+		if _, err := conn.Exec(ctx, s); err != nil {
+			return fmt.Errorf("engine: traffic grant on twin %q: %w", twinName, err)
+		}
+	}
+	return nil
+}
+
+// trafficDSN rewrites a twin's admin DSN so it authenticates as the unprivileged
+// traffic role instead: same host, port and database, different user and
+// password. twin.DSN is always a postgres:// URL (twins.dsnForDB guarantees it),
+// so swapping only the userinfo preserves sslmode and every other option
+// verbatim — the same reason twins.dsnForDB rewrites the path rather than
+// rebuilding the string.
+func trafficDSN(twinDSN, role, password string) (string, error) {
+	if !safeIdent.MatchString(role) {
+		return "", fmt.Errorf("engine: traffic role %q must match %s", role, safeIdent)
+	}
+	if !safePassword.MatchString(password) {
+		return "", fmt.Errorf("engine: generated traffic password has an unexpected shape")
+	}
+	u, err := url.Parse(twinDSN)
+	if err != nil {
+		return "", fmt.Errorf("engine: parse twin DSN for traffic role: %w", err)
+	}
+	if u.Scheme != "postgres" && u.Scheme != "postgresql" {
+		return "", fmt.Errorf("engine: twin DSN is not a postgres URL (scheme %q); cannot derive traffic DSN", u.Scheme)
+	}
+	u.User = url.UserPassword(role, password)
+	return u.String(), nil
 }
 
 // literal renders a string as a SQL literal. Only ever called with a role name
