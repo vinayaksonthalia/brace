@@ -120,6 +120,12 @@ type Config struct {
 
 	// Workers is the load generator's concurrency. Defaults to 24.
 	Workers int
+	// Labels is the traffic mix run against every twin. Nil means
+	// loadgen.DefaultLabels() — the synthetic orders store. A self-hoster who
+	// restored their own dump supplies their own here (see internal/boot's
+	// BRACE_LOAD_LABELS), which is the only way the casualty counts describe
+	// their application rather than ours.
+	Labels []loadgen.LabelSpec
 	// LockTimeout is the simulated request deadline on write traffic.
 	// Defaults to 1500ms.
 	LockTimeout time.Duration
@@ -337,7 +343,12 @@ func New(ctx context.Context, cfg Config) (*Engine, error) {
 		pool.Close()
 		return nil, err
 	}
-	e.log.Info("engine.ready", "migrator_role", cfg.MigratorRole, "workers", cfg.Workers)
+	labelSource := "default"
+	if len(cfg.Labels) > 0 {
+		labelSource = "custom"
+	}
+	e.log.Info("engine.ready", "migrator_role", cfg.MigratorRole, "workers", cfg.Workers,
+		"labels", labelSource, "label_count", len(cfg.Labels))
 	return e, nil
 }
 
@@ -552,6 +563,7 @@ func (e *Engine) runOn(ctx context.Context, twin *twins.Twin, as *Assessment, mo
 		DSN:         twin.DSN,
 		Workers:     e.cfg.Workers,
 		LockTimeout: e.cfg.LockTimeout,
+		Labels:      e.cfg.Labels,
 		Logger:      e.cfg.Logger,
 	})
 	if err != nil {
@@ -697,6 +709,11 @@ func (e *Engine) runOn(ctx context.Context, twin *twins.Twin, as *Assessment, mo
 	res.Timeline = smp.points()
 	res.BlockedSeconds = blockedSecondsFrom(res.Timeline, res.DDLStartT, baseline)
 	res.Verdict = verdictFor(res.BlockedSeconds)
+	if res.Error != "" && !guarded {
+		// Postgres refused the statement: nothing was measured, so no SAFE/UNSAFE
+		// claim is honest here. See VerdictErrored.
+		res.Verdict = VerdictErrored
+	}
 	if guarded {
 		// The guard fired: the migration never finished inside the budget, so the
 		// blocked-seconds number is only "how long it had frozen traffic SO FAR",

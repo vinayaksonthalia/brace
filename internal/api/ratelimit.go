@@ -91,17 +91,39 @@ func (l *limiter) sweepLocked(now time.Time) {
 	}
 }
 
-// clientIP identifies the caller: the first entry of X-Forwarded-For, which is
-// what Zerops' balancer sets, falling back to the socket address.
+// clientIP identifies the caller for rate-limiting.
+//
+// X-Forwarded-For is caller-supplied and therefore forgeable: trusting its
+// first entry lets anyone reset their bucket by inventing a new value per
+// request, which defeats the one control bounding a scarce resource (a warm
+// twin plus dedicated CPU for up to MaxRunDuration per run). So we only honour
+// it when the request actually arrived from a private-network hop — which is
+// what Zerops' balancer is — and we take the LAST entry, the one appended by
+// that trusted hop rather than any value the client pre-seeded. Otherwise the
+// socket address wins.
 func clientIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		first := strings.TrimSpace(strings.SplitN(xff, ",", 2)[0])
-		if first != "" {
-			return first
+	host := r.RemoteAddr
+	if h, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		host = h
+	}
+	if trustedHop(host) {
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			parts := strings.Split(xff, ",")
+			last := strings.TrimSpace(parts[len(parts)-1])
+			if last != "" {
+				return last
+			}
 		}
 	}
-	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-		return host
+	return host
+}
+
+// trustedHop reports whether addr is a loopback or private-range address, i.e.
+// an in-project balancer rather than the open internet.
+func trustedHop(addr string) bool {
+	ip := net.ParseIP(addr)
+	if ip == nil {
+		return false
 	}
-	return r.RemoteAddr
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()
 }

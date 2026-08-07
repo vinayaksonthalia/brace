@@ -24,6 +24,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/vinayaksonthalia/brace/internal/engine"
+	"github.com/vinayaksonthalia/brace/internal/loadgen"
 	"github.com/vinayaksonthalia/brace/internal/twins"
 )
 
@@ -57,7 +58,19 @@ type Config struct {
 	SeedRows int64
 	WebDir   string
 	Logger   *slog.Logger
+
+	// Seed is false in bring-your-own-data mode (BRACE_SEED=off, or
+	// SEED_ROWS=0). The template is then whatever a human restored into
+	// brace_template, and boot verifies it instead of writing to it.
+	Seed bool
+	// Labels is the traffic mix from BRACE_LOAD_LABELS. Nil means the stock
+	// orders-table mix — see loadgen.DefaultLabels.
+	Labels []loadgen.LabelSpec
 }
+
+// BYOD reports whether this configuration points the lab at a user-supplied
+// dataset in any way — either by not seeding, or by running custom traffic.
+func (c Config) BYOD() bool { return !c.Seed || len(c.Labels) > 0 }
 
 // FromEnv resolves configuration from the environment, using Zerops' own
 // variable names for the database so nothing has to be wired by hand: a
@@ -69,7 +82,23 @@ func FromEnv() (Config, error) {
 		Workers:  envInt("WORKERS", 24),
 		SeedRows: int64(envInt("SEED_ROWS", 10_000_000)),
 		WebDir:   envOr("BRACE_WEB_DIR", ""),
+		Seed:     true,
 	}
+
+	// Bring-your-own-data. Both knobs are resolved before anything touches the
+	// database, so a malformed value is a startup error and never a half-seeded
+	// template.
+	off, err := seedDisabled(os.Getenv("BRACE_SEED"), os.Getenv("SEED_ROWS"))
+	if err != nil {
+		return c, err
+	}
+	c.Seed = !off
+
+	labels, err := ParseLabels(os.Getenv("BRACE_LOAD_LABELS"))
+	if err != nil {
+		return c, err
+	}
+	c.Labels = labels
 
 	if u := strings.TrimSpace(os.Getenv("BRACE_ADMIN_URL")); u != "" {
 		c.AdminURL = u
@@ -84,8 +113,14 @@ func FromEnv() (Config, error) {
 			url.QueryEscape(user), url.QueryEscape(pass), host)
 	}
 
-	if c.SeedRows < 1000 {
+	// The floor only applies when we are the ones writing the rows. In BYOD mode
+	// SeedRows is meaningless and clamping it would put a misleading number in
+	// the log line.
+	if c.Seed && c.SeedRows < 1000 {
 		c.SeedRows = 1000
+	}
+	if !c.Seed {
+		c.SeedRows = 0
 	}
 	return c, nil
 }
@@ -145,8 +180,20 @@ func Open(ctx context.Context, cfg Config, phase Phase) (*Lab, error) {
 	}
 	lab := &Lab{Pool: pool}
 
-	phase("seeding")
-	stats, err := ensureTemplate(ctx, pool, cfg, log)
+	// Bring-your-own-data splits here. Seeding WRITES to the template; verifying
+	// only reads it. Getting this wrong in the "off" direction would mean
+	// appending ten million synthetic orders to somebody's restored production
+	// dump, so the branch is on the config value and nothing else.
+	var stats TemplateStats
+	if cfg.Seed {
+		phase("seeding")
+		stats, err = ensureTemplate(ctx, pool, cfg, log)
+	} else {
+		phase("verifying_template")
+		log.Info("byod.seed_disabled", "template", TemplateName,
+			"note", "BRACE_SEED=off — using the restored template as-is")
+		stats, err = verifyTemplate(ctx, pool, cfg, log)
+	}
 	if err != nil {
 		lab.Close(context.WithoutCancel(ctx))
 		return nil, err
@@ -166,10 +213,30 @@ func Open(ctx context.Context, cfg Config, phase Phase) (*Lab, error) {
 	}
 	lab.Twins = mgr
 
+	// The self-check runs BEFORE the engine is published, on a twin nobody else
+	// can be holding, so a bad statement is a boot failure rather than a
+	// rehearsal whose casualty count is quietly meaningless.
+	//
+	// It runs whenever the data is not ours: custom labels obviously, but also
+	// custom TEMPLATE with the stock mix, which writes to an `orders` table a
+	// restored dump probably does not have.
+	if cfg.BYOD() {
+		phase("validating_labels")
+		labels, custom := cfg.Labels, true
+		if len(labels) == 0 {
+			labels, custom = loadgen.DefaultLabels(), false
+		}
+		if err := validateLabels(ctx, mgr, labels, custom, log); err != nil {
+			lab.Close(context.WithoutCancel(ctx))
+			return nil, err
+		}
+	}
+
 	eng, err := engine.New(ctx, engine.Config{
 		AdminURL: cfg.AdminURL,
 		Twins:    mgr,
 		Workers:  cfg.Workers,
+		Labels:   cfg.Labels,
 		Logger:   log,
 	})
 	if err != nil {

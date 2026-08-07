@@ -481,6 +481,13 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	// Subscribe before writing the seed frame: a run_started published in
 	// between must land in the buffer, not in the gap.
 	ch := s.hub.subscribe()
+	if ch == nil {
+		// At subscriber capacity: say so in-band. The headers are already
+		// written, so this is an SSE-shaped refusal rather than a 503.
+		fmt.Fprint(w, "event: error\ndata: {\"error\":\"stream_capacity\"}\n\n")
+		flusher.Flush()
+		return
+	}
 	defer s.hub.unsubscribe(ch)
 
 	first := s.liveFrame()

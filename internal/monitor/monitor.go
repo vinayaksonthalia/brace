@@ -178,6 +178,12 @@ type Monitor struct {
 	cancel  context.CancelFunc
 	done    chan struct{}
 
+	// preexisting holds the OIDs of every relation that existed when the run
+	// began. Locks are only reported for these: a lock on a relation the
+	// migration created during the run (a new index, its TOAST table) blocks
+	// nobody, while a lock on a pre-existing relation is exactly what does.
+	preexisting []uint32
+
 	tracker blockedTracker
 	modes   map[string]struct{}
 	samples int
@@ -232,8 +238,18 @@ func (m *Monitor) Start(ctx context.Context) error {
 		return m.fail(fmt.Errorf("monitor: connect: %w", err))
 	}
 
+	// Snapshot the relations that exist right now. Anything the migration
+	// creates after this point (a new index, its TOAST table) is excluded from
+	// the reported lock modes, because a lock on an uncommitted new relation
+	// blocks nobody. See queryLockModes.
+	pre, preErr := snapshotRelations(ctx, conn)
+	if preErr != nil {
+		m.log.Warn("monitor.relation_snapshot_failed", "err", preErr)
+	}
+
 	pollCtx, cancel := context.WithCancel(ctx)
 	m.mu.Lock()
+	m.preexisting = pre
 	m.conn = conn
 	m.cancel = cancel
 	m.done = make(chan struct{})
@@ -333,8 +349,23 @@ func (m *Monitor) queryBlocked(ctx context.Context) (int, error) {
 }
 
 // queryLockModes returns the relation-level lock modes the migration currently
-// HOLDS. Ungranted rows are excluded on purpose: a lock the migration is still
-// queued for has hurt nobody yet.
+// HOLDS on relations that existed before it started — i.e. the locks that can
+// actually block another session.
+//
+// Two exclusions matter, and both were wrong before:
+//
+//   - Ungranted rows: a lock the migration is still queued for has hurt nobody.
+//   - Locks on relations the migration itself CREATED during this run.
+//     Postgres takes AccessExclusiveLock on every new relation's own OID (the
+//     index being built, its TOAST table), which blocks nobody — nothing else
+//     can reference an uncommitted relation. Reporting it made a plain
+//     CREATE INDEX read as "AccessExclusiveLock", contradicting both the lesson
+//     text and Postgres itself, which takes only ShareLock on the TABLE.
+//
+// The exclusion is by OID, not by age: a table REWRITE (ALTER COLUMN TYPE,
+// volatile DEFAULT) keeps the original relation and its AccessExclusiveLock —
+// which really does block writers and must still be reported. Only OIDs that
+// did not exist when the run began are dropped.
 func (m *Monitor) queryLockModes(ctx context.Context) ([]string, error) {
 	rows, err := m.conn.Query(ctx, `
 		SELECT DISTINCT l.mode
@@ -343,7 +374,8 @@ func (m *Monitor) queryLockModes(ctx context.Context) ([]string, error) {
 		WHERE a.datname = current_database()
 		  AND a.application_name = $1
 		  AND l.granted
-		  AND l.locktype = 'relation'`, m.cfg.AppName)
+		  AND l.locktype = 'relation'
+		  AND l.relation = ANY($2::oid[])`, m.cfg.AppName, m.preexisting)
 	if err != nil {
 		return nil, fmt.Errorf("monitor: lock modes: %w", err)
 	}
@@ -438,4 +470,22 @@ func Strongest(modes []string) string {
 
 func round1ms(d time.Duration) float64 {
 	return float64(d.Round(time.Millisecond)) / float64(time.Second)
+}
+
+// snapshotRelations lists every relation OID currently visible in the twin.
+func snapshotRelations(ctx context.Context, conn *pgx.Conn) ([]uint32, error) {
+	rows, err := conn.Query(ctx, `SELECT oid::oid FROM pg_class`)
+	if err != nil {
+		return nil, fmt.Errorf("monitor: snapshot relations: %w", err)
+	}
+	defer rows.Close()
+	var oids []uint32
+	for rows.Next() {
+		var oid uint32
+		if err := rows.Scan(&oid); err != nil {
+			return nil, fmt.Errorf("monitor: snapshot relations: %w", err)
+		}
+		oids = append(oids, oid)
+	}
+	return oids, rows.Err()
 }

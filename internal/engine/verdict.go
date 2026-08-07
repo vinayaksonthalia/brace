@@ -32,6 +32,14 @@ const (
 	// of "safe" or "unsafe" — it is the finding that the change cannot finish
 	// under live traffic, which in production is itself a red flag.
 	VerdictInconclusive = "INCONCLUSIVE"
+
+	// VerdictErrored is for a migration Postgres refused to run at all (bad
+	// syntax, permission denied, non-IMMUTABLE index expression, ...). Such a
+	// run measures nothing: it never held a lock, so blocked_seconds is
+	// trivially 0 — and calling that "SAFE" would be the single most misleading
+	// thing this tool could say. A migration that cannot execute is not a safe
+	// migration; it is a migration that needs fixing before it can be judged.
+	VerdictErrored = "ERRORED"
 )
 
 // RatePoint is one sample of the run's timeline. The API replays these to draw

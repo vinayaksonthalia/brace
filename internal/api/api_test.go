@@ -139,6 +139,7 @@ func TestRunIsRateLimited(t *testing.T) {
 
 	post := func() int {
 		req := httptest.NewRequest(http.MethodPost, "/api/run", strings.NewReader(`{"sql":"CREATE INDEX x ON orders (id)"}`))
+		req.RemoteAddr = "10.9.9.9:1111" // private hop, as the balancer would be
 		req.Header.Set("X-Forwarded-For", "203.0.113.7, 10.0.0.1")
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, req)
@@ -171,9 +172,21 @@ func TestClientIPPrefersFirstForwarded(t *testing.T) {
 	if got := clientIP(req); got != "10.1.2.3" {
 		t.Fatalf("clientIP without XFF = %q, want 10.1.2.3", got)
 	}
+	// X-Forwarded-For is forgeable, so it is only honoured when the request
+	// arrived from a private hop (the in-project balancer), and then only its
+	// LAST entry — the one that hop appended. A client-seeded prefix must not
+	// be able to mint a fresh rate-limit bucket.
 	req.Header.Set("X-Forwarded-For", " 203.0.113.9 , 10.0.0.1 ")
-	if got := clientIP(req); got != "203.0.113.9" {
-		t.Fatalf("clientIP = %q, want 203.0.113.9", got)
+	if got := clientIP(req); got != "10.0.0.1" {
+		t.Fatalf("clientIP behind private hop = %q, want the last hop 10.0.0.1", got)
+	}
+	// Same header, but the request came straight off the internet: ignore it
+	// entirely and key on the socket.
+	pub := httptest.NewRequest(http.MethodGet, "/api/status", nil)
+	pub.RemoteAddr = "203.0.113.50:4444"
+	pub.Header.Set("X-Forwarded-For", "1.2.3.4")
+	if got := clientIP(pub); got != "203.0.113.50" {
+		t.Fatalf("clientIP from public peer = %q, want the socket address", got)
 	}
 }
 

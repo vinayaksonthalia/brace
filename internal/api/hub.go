@@ -35,12 +35,22 @@ func newHub() *hub {
 	return &hub{subs: make(map[chan []byte]struct{})}
 }
 
-// subscribe registers a new client and returns its frame channel.
+// maxSubscribers caps concurrent SSE clients. Each one holds a goroutine and a
+// file descriptor for as long as it stays connected, and /api/stream is not
+// rate-limited (a dashboard legitimately opens one on load), so without a
+// ceiling a trivial script could exhaust descriptors on a public endpoint.
+const maxSubscribers = 256
+
+// subscribe registers a new client and returns its frame channel. It returns
+// nil when the hub is at capacity; the caller must answer 503.
 func (h *hub) subscribe() chan []byte {
 	ch := make(chan []byte, subBuffer)
 	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(h.subs) >= maxSubscribers {
+		return nil
+	}
 	h.subs[ch] = struct{}{}
-	h.mu.Unlock()
 	return ch
 }
 

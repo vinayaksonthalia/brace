@@ -79,8 +79,12 @@ func main() {
 			if ctx.Err() != nil {
 				return
 			}
+			// The full error goes to the operator's log only. The phase string
+			// is served unauthenticated on /api/* while the lab is starting, and
+			// wrapped pgx errors carry host/user/database (and, on a malformed
+			// DSN, the DSN itself) — never let that reach a public response.
 			log.Error("brace.boot_failed", "err", err)
-			srv.SetPhase("failed: " + err.Error())
+			srv.SetPhase("failed")
 			return
 		}
 		srv.Ready(lab.Engine, lab.Pool, api.TemplateInfo{
