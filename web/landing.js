@@ -26,6 +26,44 @@
     items.forEach(function (n) { io.observe(n); });
   }
 
+  /* ── the section rail ────────────────────────────────────
+     [03/06] › THE CLAIM, updated as you scroll, so the page reads
+     as a numbered report rather than a scroll. Purely decorative
+     (aria-hidden) — the headings are the real structure — and it
+     stays hidden until the reader has actually started reading. */
+  (function () {
+    var rail = document.getElementById('secrail');
+    var secs = Array.prototype.slice.call(document.querySelectorAll('[data-sec]'));
+    if (!rail || !secs.length || !('IntersectionObserver' in window)) return;
+
+    var noEl = rail.querySelector('.secrail__no');
+    var nameEl = rail.querySelector('.secrail__name');
+    var total = String(secs.length).padStart(2, '0');
+    var seen = new Array(secs.length).fill(false);
+    var shown = -1;
+
+    function pad(n) { return String(n + 1).padStart(2, '0'); }
+
+    function paint() {
+      // the deepest section currently on screen wins, so scrolling
+      // forward never flickers back to the one above it
+      var idx = -1;
+      for (var i = 0; i < secs.length; i++) if (seen[i]) idx = i;
+      if (idx < 0 || idx === shown) return;
+      shown = idx;
+      noEl.textContent = '[' + pad(idx) + '/' + total + ']';
+      nameEl.textContent = '› ' + secs[idx].dataset.sec;
+      rail.classList.toggle('in', idx > 0);
+    }
+
+    rail.hidden = false;
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) { seen[secs.indexOf(e.target)] = e.isIntersecting; });
+      paint();
+    }, { rootMargin: '-12% 0px -55% 0px' });
+    secs.forEach(function (s) { io.observe(s); });
+  })();
+
   /* ── the ambient heartbeat ───────────────────────────────
      A fixed trace at the bottom edge that follows you down the page:
      barely there at the top, a little stronger as you scroll, then

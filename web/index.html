@@ -38,6 +38,16 @@ document.documentElement.setAttribute('data-theme',t);})();</script>
 
 <a class="skip" href="#how">Skip to how it works</a>
 
+<!-- ══ SECTION RAIL ═══════════════════════════════════════════
+     A fixed report index: which of the six sections you are
+     reading, in the facility's own mono. Driven by an
+     IntersectionObserver in landing.js. Decorative — the headings
+     themselves are the real structure — so it is aria-hidden. -->
+<div class="secrail" id="secrail" aria-hidden="true" hidden>
+  <b class="secrail__no">[01/06]</b>
+  <span class="secrail__name">› the specimen</span>
+</div>
+
 <!-- ══ RAIL ═══════════════════════════════════════════════════ -->
 <header class="rail">
   <div class="rail__brand">
@@ -73,7 +83,7 @@ document.documentElement.setAttribute('data-theme',t);})();</script>
 <main>
 
 <!-- ══ HERO ═══════════════════════════════════════════════════ -->
-<section class="hero">
+<section class="hero" data-sec="the specimen">
   <div class="hero__inner reveal">
     <div class="hero__say">
       <p class="plate"><i>Specimen</i> your migration <i>Method</i> full-scale impact</p>
@@ -123,6 +133,45 @@ document.documentElement.setAttribute('data-theme',t);})();</script>
     </div>
   </div>
 
+  <!-- ══ THE GATE ═════════════════════════════════════════════
+       Cause and effect as one small embedded diagram: the same
+       index, shipped two ways. Both rows are real measurements
+       from this rig on a 10M-row table. The joint between them
+       is the product. -->
+  <div class="gate reveal" aria-label="The same migration, shipped two ways">
+    <div class="gate__row gate__row--blind">
+      <span class="gate__no">01</span>
+      <div class="gate__body">
+        <b class="gate__title">without brace · shipped blind</b>
+        <span class="gate__fact"><i>15.75s</i> freeze <em>·</em> <i>312</i> writes died in production</span>
+      </div>
+    </div>
+
+    <div class="gate__joint" aria-hidden="true">
+      <span class="gate__node">
+        <svg viewBox="44 44 152 152" focusable="false">
+          <defs><clipPath id="gk"><circle cx="120" cy="120" r="74"/></clipPath></defs>
+          <g clip-path="url(#gk)">
+            <rect x="46" y="46" width="74" height="74" class="mark__on"/>
+            <rect x="120" y="46" width="74" height="74" class="mark__off"/>
+            <rect x="46" y="120" width="74" height="74" class="mark__off"/>
+            <rect x="120" y="120" width="74" height="74" class="mark__on"/>
+          </g>
+          <circle cx="120" cy="120" r="74" fill="none" class="mark__ring" stroke-width="6"/>
+        </svg>
+      </span>
+      <span class="gate__joint-label">the crash test</span>
+    </div>
+
+    <div class="gate__row gate__row--caught">
+      <span class="gate__no">02</span>
+      <div class="gate__body">
+        <b class="gate__title">with brace · caught on a dummy</b>
+        <span class="gate__fact"><i>0.00s</i> blocked <em>·</em> <i>0</i> died <em>·</em> same index</span>
+      </div>
+    </div>
+  </div>
+
   <!-- signature gesture: the pulse, and what happens to it -->
   <figure class="teaser reveal" aria-label="Live write traffic, freezing under a blocking migration">
     <figcaption class="teaser__cap">
@@ -139,7 +188,8 @@ document.documentElement.setAttribute('data-theme',t);})();</script>
 <!-- ══ RECEIPTS ═══════════════════════════════════════════════
      Evidence, not testimonials. Three published incidents, cited
      so anyone can go and check them. -->
-<section class="sec sec--receipts">
+<div class="band">
+<section class="sec sec--receipts" data-sec="the evidence">
   <header class="sec__head reveal">
     <span class="eyebrow">incidents on record</span>
     <h2>This is what a blocking lock does in production.</h2>
@@ -167,7 +217,7 @@ document.documentElement.setAttribute('data-theme',t);})();</script>
       <span class="receipt__year">2026</span>
       <blockquote>There were always active queries holding locks.</blockquote>
       <p class="receipt__src">
-        <span class="receipt__who">Autumn postmortem</span>
+        <a href="https://github.com/useautumn/autumn/blob/8e65867dcff363b6c3b432ef6636a871ef46297c/apps/website/content/blog/post-mortem-database-outage-caused-by-collation-migration-locking-conflict.mdx" target="_blank" rel="noopener noreferrer">Autumn postmortem</a>
         <span>an ALTER TABLE wanting an exclusive lock denied ~10% of API requests</span>
       </p>
     </li>
@@ -175,14 +225,24 @@ document.documentElement.setAttribute('data-theme',t);})();</script>
 
   <p class="receipts__note">Every one of these was survivable on a dummy first. That is the whole idea.</p>
 </section>
+</div>
 
 <!-- ══ HOW IT WORKS ═══════════════════════════════════════════ -->
-<section class="sec" id="how">
+<section class="sec" id="how" data-sec="test procedure">
   <header class="sec__head reveal">
     <span class="eyebrow">test procedure</span>
-    <h2>Four steps, in this order, every run.</h2>
+    <h2>The loop, in this order, every run.</h2>
     <p class="sec__lede">A crash test is only worth anything if the dummy is full-size, the seats are occupied, and somebody measures the impact. Brace does all three, then throws the car away.</p>
   </header>
+
+  <!-- the control loop, with the real settings it runs at -->
+  <ol class="loop reveal" aria-label="Control loop">
+    <li class="loop__step"><span class="loop__no">01</span><b>clone</b><span class="loop__val">10M rows · 894 MB</span></li>
+    <li class="loop__step"><span class="loop__no">02</span><b>load</b><span class="loop__val">24 workers</span></li>
+    <li class="loop__step"><span class="loop__no">03</span><b>migrate</b><span class="loop__val">lock_timeout 1.5s</span></li>
+    <li class="loop__step"><span class="loop__no">04</span><b>measure</b><span class="loop__val">250ms samples</span></li>
+    <li class="loop__step"><span class="loop__no">05</span><b>verdict</b><span class="loop__val">unsafe &gt; 1s</span></li>
+  </ol>
 
   <ol class="steps">
     <li class="step reveal">
@@ -209,7 +269,7 @@ document.documentElement.setAttribute('data-theme',t);})();</script>
 </section>
 
 <!-- ══ THE CLAIM ══════════════════════════════════════════════ -->
-<section class="claim reveal">
+<section class="claim reveal" data-sec="the claim">
   <p class="claim__line">Linters read the car's blueprint and guess.<br><b>Brace crashes the car.</b></p>
   <div class="claim__foot">
     <span class="eyebrow">honest about the neighbours</span>
@@ -222,7 +282,7 @@ document.documentElement.setAttribute('data-theme',t);})();</script>
 </section>
 
 <!-- ══ ZEROPS ═════════════════════════════════════════════════ -->
-<section class="sec sec--zerops">
+<section class="sec sec--zerops" data-sec="the facility">
   <header class="sec__head reveal">
     <span class="eyebrow">runs on zerops</span>
     <h2>Three services. One import file.</h2>
@@ -251,7 +311,7 @@ document.documentElement.setAttribute('data-theme',t);})();</script>
 </section>
 
 <!-- ══ CLOSE ══════════════════════════════════════════════════ -->
-<section class="close reveal">
+<section class="close reveal" data-sec="sign-off">
   <h2>Bring your own migration.</h2>
   <p>Paste the one you are nervous about. It runs on a dummy, not on your users.</p>
   <a class="btn btn--primary btn--lg" href="lab.html">Enter the lab <span aria-hidden="true">→</span></a>

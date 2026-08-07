@@ -138,6 +138,48 @@
       if (active && now() >= active.endsAt) finish();
     }
 
+    /* The 250ms trace the real engine publishes as RunResult.Timeline.
+       Synthesised here from the same lifecycle the stats stream already
+       animates, so the mock's crash report can draw the divergence proof
+       exactly as the rig's does. Shape is the frozen contract:
+       [{t, wps, casualties}] in seconds since load start. */
+    function timelineFor(r) {
+      var out = [];
+      var lead = r.blockedFrom ? r.blockedFrom - r.startedAt : 1000 / speed;
+      var pre = 3000 / speed;                            // baseline before the run
+      var span = (now() - r.startedAt) + 1000 / speed;   // a beat of tail
+      var step = 250 / speed;
+      var cas = 0;
+      var perSample = 430 * (step / 1000) * speed;
+      for (var ms = -pre; ms <= span; ms += step) {
+        var t = r.startedAt + ms;
+        var isBlocked = r.blockedFrom && t >= r.blockedFrom && t < r.blockedUntil;
+        var wps;
+        if (isBlocked) {
+          var into = t - r.blockedFrom;
+          wps = into < 500 ? Math.round(BASELINE * (1 - into / 500) * 0.5) : 0;
+          cas += perSample;
+        } else if (r.blockedUntil && t >= r.blockedUntil && t - r.blockedUntil < 700 / speed) {
+          wps = Math.round(BASELINE * ((t - r.blockedUntil) / (700 / speed)) * 0.98);
+        } else {
+          wps = jitter(BASELINE * (r.mode === 'safe' ? 0.965 : 1), 0.03);
+        }
+        out.push({
+          // seconds since load start, on the un-sped-up clock the real
+          // engine reports in — so ?speed=3 changes the wall time, not
+          // the numbers on the report card
+          t: Math.round((ms + pre) / 1000 * speed * 1000) / 1000,
+          wps: wps,
+          casualties: Math.round(cas)
+        });
+      }
+      // The DDL is ISSUED before writes die: it has to wait for its own
+      // lock first. Half a second of that gap is what makes the two traces
+      // visibly run together and then part, which is the whole point.
+      var ddl = (pre + lead) / 1000 * speed - 0.5;
+      return { points: out, ddlStartT: Math.round(Math.max(0, ddl) * 1000) / 1000 };
+    }
+
     function finish() {
       var r = active;
       active = null;
@@ -148,6 +190,8 @@
       var blockedSeconds = r.blockedUntil > r.blockedFrom
         ? Math.round((r.blockedUntil - r.blockedFrom) / 100 * speed) / 10
         : 0;
+
+      var tl = timelineFor(r);
 
       handlers.onRunFinished({
         run_id: r.run_id,
@@ -165,6 +209,11 @@
         // A CONCURRENTLY build that does not finish leaves the index in
         // the schema, marked INVALID. The API reports them; so do we.
         invalid_indexes: r.invalid ? ['idx_orders_customer_id'] : [],
+        // the evidence the divergence proof is drawn from
+        baseline_writes_per_sec: BASELINE,
+        timeline: tl.points,
+        ddl_start_t: tl.ddlStartT,
+        ddl_end_t: Math.round((now() - r.startedAt + 3000 / speed) / 1000 * speed * 1000) / 1000,
         error: null
       });
     }

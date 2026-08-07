@@ -424,6 +424,7 @@ const API = window.BRACE_API_BASE || (/^web-[^.]+\./.test(location.host)
     mockChip: $('#mockChip'),
     sql: $('#sql'),
     runBtn: $('#runBtn'),
+    cmdChip: $('#cmdChip'),
     runText: $('.run__text'),
     runHint: $('#runHint'),
     report: $('#reportBody'),
@@ -511,6 +512,10 @@ const API = window.BRACE_API_BASE || (/^web-[^.]+\./.test(location.host)
 
   /* ── stats ──────────────────────────────────────────────── */
   function onStats(s) {
+    // The first frame is what turns the awaiting labels into numbers.
+    // Before it lands, every readout says what it is waiting for rather
+    // than reading a zero we never measured.
+    if (el.root.dataset.feed !== 'live') el.root.dataset.feed = 'live';
     // Optional: a backend may attach 60s of history to the first frame
     // so the scope opens full. Purely additive to the contract.
     if (!seeded) { seeded = true; if (s.history) chart.seed(s.history); }
@@ -575,12 +580,22 @@ const API = window.BRACE_API_BASE || (/^web-[^.]+\./.test(location.host)
     refreshStatus();
   }
 
+  /* The one place the connection lamp is decided. Four states, each
+     with its own colour and its own short mono label:
+       init  amber   the transport has not answered yet
+       sse   green   live, one frame per second, pushed
+       poll  amber   the stream died; same numbers, pulled at 1 Hz
+       down  red     nothing is answering */
+  var TRANSPORT_TITLE = {
+    init: 'Opening the stats stream.',
+    sse: 'Server-sent events, one stats frame per second.',
+    poll: 'The SSE stream dropped twice. Stats are now polled once a second — same data, same numbers.',
+    down: 'The stats feed is not answering. The numbers below are the last ones measured.'
+  };
   function onTransport(t) {
     el.transportChip.dataset.t = t.kind;
     el.transportLabel.textContent = api && api.isMock ? 'mock · sse' : t.label;
-    el.transportChip.title = t.kind === 'poll'
-      ? 'The SSE stream dropped twice. Stats are now polled once a second — same data, same numbers.'
-      : 'Server-sent events, one stats frame per second.';
+    el.transportChip.title = TRANSPORT_TITLE[t.kind] || TRANSPORT_TITLE.init;
   }
 
   /* ── report cards ───────────────────────────────────────── */
@@ -618,6 +633,134 @@ const API = window.BRACE_API_BASE || (/^web-[^.]+\./.test(location.host)
       : 'The build did not finish, so ' + names.length + ' indexes are still in the schema and marked INVALID: ' +
         names.join(' ') + '. Postgres will not use them, and the next build will not replace them. ' +
         'Drop each one, then run the migration again.';
+  }
+
+  /* ── THE DIVERGENCE PROOF ─────────────────────────────────────
+     The single most useful picture the run can draw: what a healthy
+     run holds (the reference — flat at baseline), overlaid with what
+     this run actually did, and one mark at the instant the two part.
+
+     Everything here comes from the run's own evidence: ev.timeline is
+     the 250ms trace [{t, wps, casualties}], ev.ddl_start_t / ddl_end_t
+     delimit the migration inside it, and ev.baseline_writes_per_sec is
+     the reference height. No new API surface — this is the payload the
+     contract already carries, finally drawn.
+
+     Divergence is defined as the first sample inside the DDL window
+     where writes actually started dying; if nothing died, the first
+     sample that fell below 40% of baseline. If neither happened, the
+     two traces never parted and we say so instead of inventing a mark. */
+  var DV_W = 640, DV_H = 72, DV_PAD = 6;
+
+  function buildDivergence(ev, safe) {
+    var tl = ev.timeline;
+    if (!tl || tl.length < 4) return null;
+
+    var base = ev.baseline_writes_per_sec || baselineWps || 0;
+    if (base <= 0) {
+      for (var b = 0; b < tl.length; b++) base = Math.max(base, tl[b].wps || 0);
+    }
+    if (base <= 0) return null;
+
+    var t0 = tl[0].t, t1 = tl[tl.length - 1].t;
+    if (!(t1 > t0)) return null;
+    var ddl = typeof ev.ddl_start_t === 'number' ? ev.ddl_start_t : t0;
+
+    var top = base * 1.25;
+    var X = function (t) { return (t - t0) / (t1 - t0) * DV_W; };
+    var Y = function (v) {
+      return DV_PAD + (DV_H - DV_PAD * 2) * (1 - Math.min(1, Math.max(0, v / top)));
+    };
+
+    // where the two traces part
+    var cut = null, cutKind = null;
+    var casAtDdl = null;
+    for (var i = 0; i < tl.length; i++) {
+      var p = tl[i];
+      if (p.t < ddl) { casAtDdl = p.casualties || 0; continue; }
+      if (casAtDdl === null) casAtDdl = p.casualties || 0;
+      if ((p.casualties || 0) > casAtDdl) { cut = p; cutKind = 'died'; break; }
+      if (cut === null && (p.wps || 0) < base * 0.4) { cut = p; cutKind = 'stalled'; }
+    }
+
+    var wrap = document.createElement('div');
+    wrap.className = 'diverge';
+
+    var runPts = tl.map(function (p) { return X(p.t) + ',' + Y(p.wps || 0); }).join(' ');
+    var refY = Y(base);
+
+    // the shaded delta between the reference and the trace, so the
+    // missing writes read as an area and not just a dropped line
+    var fill = 'M0,' + refY + ' L' + runPts.split(' ').join(' L') + ' L' + DV_W + ',' + refY + ' Z';
+
+    var svgNs = 'http://www.w3.org/2000/svg';
+    var svg = document.createElementNS(svgNs, 'svg');
+    svg.setAttribute('viewBox', '0 0 ' + DV_W + ' ' + DV_H);
+    svg.setAttribute('preserveAspectRatio', 'none');
+    svg.setAttribute('focusable', 'false');
+    svg.setAttribute('aria-hidden', 'true');
+
+    function node(name, attrs) {
+      var n = document.createElementNS(svgNs, name);
+      Object.keys(attrs).forEach(function (k) { n.setAttribute(k, attrs[k]); });
+      // strokes must not stretch with the non-uniform viewBox
+      if (name !== 'path' || attrs.class !== 'dv-fill') n.setAttribute('vector-effect', 'non-scaling-stroke');
+      return n;
+    }
+
+    if (!safe) svg.appendChild(node('path', { 'class': 'dv-fill', d: fill }));
+    svg.appendChild(node('line', { 'class': 'dv-ref', x1: 0, y1: refY, x2: DV_W, y2: refY }));
+    svg.appendChild(node('polyline', { 'class': 'dv-run', points: runPts }));
+
+    var pillText, pillSafe = false;
+    if (cut && !safe) {
+      var cx = X(cut.t);
+      svg.appendChild(node('line', { 'class': 'dv-tick', x1: cx, y1: 0, x2: cx, y2: DV_H }));
+      pillText = (cutKind === 'died' ? 'writes died' : 'writes stalled') +
+        ' · t+' + (Math.round((cut.t - ddl) * 10) / 10).toFixed(1) + 's';
+    } else {
+      pillSafe = true;
+      pillText = 'no divergence';
+    }
+
+    var head = document.createElement('div');
+    head.className = 'diverge__head';
+    head.innerHTML =
+      '<span>divergence — measured</span>' +
+      '<span class="diverge__key"><i class="is-ref">safe shape</i><i>this run</i></span>';
+
+    var frame = document.createElement('div');
+    frame.className = 'diverge__frame';
+    frame.appendChild(svg);
+
+    var pill = document.createElement('span');
+    pill.className = 'diverge__pill' + (pillSafe ? ' diverge__pill--safe' : '');
+    pill.textContent = pillText;
+    // clamped so the pill never hangs off either end of the frame
+    pill.style.left = (cut && !safe
+      ? Math.min(88, Math.max(12, (X(cut.t) / DV_W) * 100))
+      : 50) + '%';
+    frame.appendChild(pill);
+
+    var foot = document.createElement('p');
+    foot.className = 'diverge__foot';
+    foot.textContent = 'Dashed: ' + num(base) + ' writes/sec, the rate this table held before the migration. ' +
+      'Solid: what it actually did, sampled every 250ms.';
+
+    wrap.appendChild(head);
+    wrap.appendChild(frame);
+    wrap.appendChild(foot);
+    return wrap;
+  }
+
+  function renderDivergence(card, ev, safe) {
+    var host = slot(card, 'diverge');
+    if (!host) return;
+    var built;
+    try { built = buildDivergence(ev, safe); } catch (e) { built = null; }
+    if (!built) return;                      // no timeline, no claim
+    host.hidden = false;
+    host.replaceWith(built);
   }
 
   var LABEL_NAMES = { checkout: 'checkouts', login: 'logins', add_to_cart: 'cart adds' };
@@ -674,6 +817,7 @@ const API = window.BRACE_API_BASE || (/^web-[^.]+\./.test(location.host)
       });
     }
 
+    renderDivergence(card, ev, safe);
     renderWreckage(card, ev);
 
     slot(card, 'duration').textContent = ev.duration_seconds != null
@@ -759,6 +903,66 @@ const API = window.BRACE_API_BASE || (/^web-[^.]+\./.test(location.host)
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); doRun(); }
   });
   el.runBtn.addEventListener('click', doRun);
+
+  /* ── the command chip ───────────────────────────────────────
+     The RUN button is one HTTP call and the chip names it. Clicking
+     copies the curl for the SQL currently in the console, so the lab
+     is reachable from a terminal without reverse-engineering it. */
+  if (el.cmdChip) {
+    var cmdResetTimer = null;
+    var curlFor = function () {
+      var origin = API || location.origin;
+      return "curl -sX POST " + origin + "/api/run \\\n" +
+        "  -H 'content-type: application/json' \\\n" +
+        "  -d " + JSON.stringify(JSON.stringify({ sql: el.sql.value })).replace(/'/g, "'\\''");
+    };
+    var flash = function (label, ok) {
+      var path = $('.cmd__path', el.cmdChip);
+      var verb = $('.cmd__verb', el.cmdChip);
+      el.cmdChip.classList.add(ok ? 'is-copied' : 'is-failed');
+      verb.textContent = label;
+      path.textContent = '';
+      clearTimeout(cmdResetTimer);
+      cmdResetTimer = setTimeout(function () {
+        el.cmdChip.classList.remove('is-copied', 'is-failed');
+        verb.textContent = 'POST';
+        path.textContent = '/api/run';
+      }, 1800);
+    };
+
+    /* Clipboard permission is not guaranteed — an insecure origin or a
+       locked-down browser will refuse. The old execCommand path still
+       works in all of them, so the chip tries that before giving up. */
+    var legacyCopy = function (text) {
+      var ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.cssText = 'position:fixed;top:0;left:-9999px;opacity:0';
+      document.body.appendChild(ta);
+      var done = false;
+      try {
+        ta.select();
+        ta.setSelectionRange(0, text.length);
+        done = document.execCommand('copy');
+      } catch (e) { done = false; }
+      document.body.removeChild(ta);
+      return done;
+    };
+
+    el.cmdChip.addEventListener('click', function () {
+      var text = curlFor();
+      var no = function () {
+        var done = legacyCopy(text);
+        flash(done ? 'copied ✓' : 'copy blocked', done);
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(function () { flash('copied ✓', true); }, no);
+      } else {
+        no();
+      }
+    });
+    el.cmdChip.setAttribute('aria-label', 'Copy the curl command for this run');
+  }
 
   function doRun() {
     if (state === 'running' || state === 'crash') return;

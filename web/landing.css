@@ -102,6 +102,177 @@
 .hero__disc-note::before,
 .hero__disc-note::after{ content:""; width:var(--s5); height:1px; background:var(--edge-hot); }
 
+/* ═══ THE GATE ══════════════════════════════════════════════════
+   Cause and effect as a two-row timeline. Row 01 is what shipping
+   blind costs; row 02 is the same statement after the rehearsal.
+   The 1px joint between them, with the calibration mark sitting on
+   it, IS the product — so the diagram makes you look at it.
+   Red and green here are verdicts, which is what they are for. */
+.gate{
+  max-width:var(--measure); margin:clamp(32px,5vw,56px) auto 0;
+  border:1px solid var(--edge); border-radius:var(--r);
+  background:linear-gradient(180deg,var(--panel),var(--panel-deep));
+  box-shadow:var(--e1), var(--bezel);
+  padding:var(--s5) var(--gut);
+  display:grid; gap:0;
+}
+.gate__row{
+  position:relative;
+  display:flex; align-items:baseline; gap:var(--s4);
+  padding:var(--s3) 0 var(--s3) var(--s4);
+  min-width:0;
+}
+/* the verdict stripe: 2px, the full height of its own row */
+.gate__row::before{
+  content:""; position:absolute; left:0; top:0; bottom:0; width:2px; border-radius:1px;
+}
+.gate__row--blind::before { background:var(--red); }
+.gate__row--caught::before{ background:var(--green); }
+
+.gate__no{
+  flex:none;
+  font-size:var(--t-micro); letter-spacing:.14em; color:var(--ink-3);
+  font-variant-numeric:tabular-nums;
+}
+.gate__body{ display:flex; flex-direction:column; gap:6px; min-width:0; }
+.gate__title{
+  font-size:var(--t-label); font-weight:600;
+  letter-spacing:var(--track-label); text-transform:uppercase; color:var(--ink-2);
+}
+.gate__fact{
+  font-size:clamp(13px,1.7vw,16px); letter-spacing:.02em; color:var(--ink-3);
+  font-variant-numeric:tabular-nums;
+}
+.gate__fact i{ font-style:normal; font-weight:700; letter-spacing:-.015em; }
+.gate__fact em{ font-style:normal; color:var(--ink-3); opacity:.5; margin:0 2px; }
+.gate__row--blind  .gate__fact i{ color:var(--red); }
+.gate__row--caught .gate__fact i{ color:var(--green); }
+
+/* the joint — a hairline dropping from row 01 to row 02, interrupted
+   at its midpoint by the calibration disc */
+.gate__joint{
+  position:relative; display:flex; align-items:center; gap:var(--s3);
+  padding-left:1px; margin-left:0; min-height:52px;
+}
+.gate__joint::before{
+  content:""; position:absolute; left:0; top:0; bottom:0; width:1px;
+  background:linear-gradient(180deg, var(--red), var(--edge-hot) 45%, var(--edge-hot) 55%, var(--green));
+  opacity:.55;
+}
+.gate__node{
+  position:relative; z-index:1; flex:none;
+  width:26px; height:26px; margin-left:-13px;
+  display:grid; place-items:center;
+  border-radius:50%; background:var(--panel);
+  box-shadow:0 0 0 1px var(--edge-hot);
+}
+.gate__node svg{ width:16px; height:16px; display:block; }
+.gate__joint-label{
+  font-size:9px; letter-spacing:.24em; text-transform:uppercase; color:var(--ink-3);
+  margin-left:var(--s2);
+}
+
+/* wide: the two rows sit side by side and the joint runs horizontally */
+@media (min-width:860px){
+  .gate{
+    grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);
+    align-items:center; gap:var(--s4);
+  }
+  .gate__joint{
+    flex-direction:column; justify-content:center; min-height:0;
+    width:120px; padding-left:0;
+  }
+  .gate__joint::before{
+    left:0; right:0; top:50%; bottom:auto; width:auto; height:1px;
+    background:linear-gradient(90deg, var(--red), var(--edge-hot) 45%, var(--edge-hot) 55%, var(--green));
+  }
+  .gate__node{ margin-left:0; }
+  .gate__joint-label{ margin:var(--s2) 0 0; text-align:center; }
+}
+
+/* ═══ THE CONTROL LOOP ══════════════════════════════════════════
+   Five bordered chips on a connecting rail — the same rail the
+   topology strip uses, so the two pages agree about what a flow
+   diagram looks like here. Each chip carries a real setting. */
+.loop{
+  list-style:none; margin:var(--s7) 0 0; padding:0;
+  display:grid; grid-template-columns:repeat(5,minmax(0,1fr));
+  gap:0;
+}
+.loop__step{
+  position:relative; min-width:0;
+  display:flex; flex-direction:column; gap:5px;
+  padding:var(--s4) var(--s3);
+  border:1px solid var(--edge); border-radius:var(--r-sm);
+  background:var(--panel);
+  transition:border-color var(--t-mid) var(--ease);
+}
+.loop__step + .loop__step{ margin-left:var(--s5); }
+/* the rail: a hairline with an arrowhead, between every pair */
+.loop__step + .loop__step::before{
+  content:""; position:absolute; left:calc(var(--s5) * -1); top:50%; width:var(--s5); height:1px;
+  background:var(--edge-hot);
+}
+.loop__step + .loop__step::after{
+  content:""; position:absolute; left:-7px; top:50%; transform:translateY(-50%);
+  border-left:5px solid var(--edge-hot); border-top:3.5px solid transparent; border-bottom:3.5px solid transparent;
+}
+.loop__step:hover{ border-color:var(--edge-hot); }
+.loop__no{
+  font-size:9px; letter-spacing:.2em; color:var(--amber); font-variant-numeric:tabular-nums;
+}
+.loop__step b{
+  font-size:var(--t-label); letter-spacing:var(--track-label); text-transform:uppercase; color:var(--ink);
+}
+.loop__val{
+  font-size:9px; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-3);
+  overflow-wrap:anywhere;
+}
+
+/* ═══ THE INCIDENT BAND ═════════════════════════════════════════
+   The one deliberate full-bleed break in the dark. It is the
+   facility's own amber, at wash strength, with amber hairlines
+   top and bottom — no new colour enters the system. It marks the
+   receipts as the section that is quoting somebody else. */
+.band{
+  position:relative; width:100%; margin-top:clamp(48px,7vw,80px);
+  border-top:1px solid var(--amber-dim); border-bottom:1px solid var(--amber-dim);
+  background:
+    linear-gradient(180deg, var(--amber-wash), var(--amber-wash)),
+    var(--floor);
+  padding-bottom:clamp(48px,7vw,72px);
+}
+.band .sec{ padding-top:clamp(48px,7vw,72px); }
+/* inside the band the receipts are ruled by amber hairlines instead of
+   the 1px-gap grid, so the band shows through them */
+.band .receipts{
+  background:transparent; gap:0;
+  border-top-color:var(--amber-dim); border-bottom-color:var(--amber-dim);
+}
+.band .receipt{ background:transparent; }
+.band .receipt + .receipt{ border-left:1px solid var(--amber-dim); }
+.band .receipts__note{ color:var(--ink-2); }
+
+/* ═══ THE SECTION RAIL ══════════════════════════════════════════
+   A fixed report index in the top-right corner: [03/06] › THE
+   CLAIM. Makes the page read as a numbered document rather than a
+   scroll. Hidden wherever the top rail already owns that corner. */
+.secrail{
+  position:fixed; z-index:19; right:var(--gut); top:76px;
+  display:flex; align-items:center; gap:var(--s2);
+  padding:5px 10px;
+  border:1px solid var(--edge); border-radius:var(--r-pill);
+  background:var(--rail-bg); backdrop-filter:blur(8px);
+  font-size:9px; letter-spacing:.18em; text-transform:uppercase;
+  color:var(--ink-3); white-space:nowrap;
+  pointer-events:none;
+  opacity:0; transform:translateY(-6px);
+  transition:opacity var(--t-mid) var(--ease), transform var(--t-mid) var(--ease);
+}
+.secrail.in{ opacity:1; transform:none; }
+.secrail__no{ font-weight:700; color:var(--amber); font-variant-numeric:tabular-nums; letter-spacing:.1em; }
+.secrail__name{ color:var(--ink-2); }
+
 /* ── TEASER (the brand gesture, with a real axis under it) ─── */
 .teaser{
   margin:clamp(40px,6vw,72px) auto 0; max-width:var(--measure);
@@ -388,6 +559,31 @@
   .receipts{ grid-template-columns:1fr; }
   .receipt{ padding:var(--s5) 0; gap:var(--s3); }
   .receipt:not(:first-child){ padding-left:0; }
+  .band .receipt + .receipt{ border-left:0; border-top:1px solid var(--amber-dim); }
+}
+/* the loop folds from five across, to three, to a vertical rail —
+   the connector rotating with it each time */
+@media (max-width:1000px){
+  .loop{ grid-template-columns:repeat(3,minmax(0,1fr)); gap:var(--s5) 0; }
+  .loop__step:nth-child(3n+1){ margin-left:0; }
+  .loop__step:nth-child(3n+1)::before,
+  .loop__step:nth-child(3n+1)::after{ display:none; }
+}
+@media (max-width:620px){
+  .loop{ grid-template-columns:1fr; gap:var(--s5) 0; }
+  .loop__step{ margin-left:0 !important; }
+  .loop__step + .loop__step::before{
+    display:block; left:var(--s5); top:calc(var(--s5) * -1); width:1px; height:var(--s5);
+  }
+  .loop__step + .loop__step::after{
+    display:block; left:calc(var(--s5) - 3px); top:-7px; transform:none;
+    border-left:3.5px solid transparent; border-right:3.5px solid transparent;
+    border-top:5px solid var(--edge-hot); border-bottom:0;
+  }
+}
+/* the top rail owns that corner below this width — one badge, not two */
+@media (max-width:1080px){
+  .secrail{ display:none; }
 }
 @media (max-width:760px){
   .steps{ grid-template-columns:1fr; }

@@ -195,6 +195,51 @@ main{
 .lab--total .lab__ok{ color:var(--ink-2); }
 [data-state="crash"] .lab--total .lab__ok{ color:var(--red); }
 
+/* ═══ AWAITING STATES ═══════════════════════════════════════════
+   An instrument with no feed yet must not read zero — zero is a
+   measurement, and we have not made one. Until the first stats
+   frame lands, every readout says what it is waiting for, in the
+   facility's own mono, with a slow lamp beside it.
+
+   One switch drives all of them: <html data-feed>, set to "live"
+   by app.js on the first frame from whichever transport won. */
+.await{
+  display:none; align-items:center; gap:7px;
+  font-size:9.5px; letter-spacing:.18em; text-transform:uppercase; color:var(--ink-3);
+  white-space:nowrap; min-width:0;
+}
+.await__dot{
+  width:6px; height:6px; border-radius:50%; flex:none;
+  background:var(--ink-3); opacity:.8;
+  animation:beat 2.8s ease-in-out infinite;
+}
+[data-feed="wait"] .await{ display:flex; }
+/* while waiting, the number and its unit step aside for the label */
+[data-feed="wait"] .gauge__value,
+[data-feed="wait"] .lab__ok,
+[data-feed="wait"] .lab__died{ display:none; }
+.await--gauge{
+  /* holds the same vertical space the big readout gave up, so nothing
+     below it moves when the first frame arrives */
+  min-height:clamp(54px, 14vw, 116px); align-items:flex-end;
+  font-size:var(--t-label); letter-spacing:var(--track-eyebrow);
+  margin:var(--s2) 0 var(--s1);
+}
+.await--gauge .await__dot{ margin-bottom:3px; }
+.await--lab{ padding:3px 0; }
+.await--plot{
+  position:absolute; left:var(--gut); top:50%; transform:translateY(-50%);
+  font-size:var(--t-label); letter-spacing:var(--track-eyebrow);
+  border:1px solid var(--edge); border-radius:var(--r-sm);
+  padding:6px 12px; background:var(--panel-2);
+}
+/* a lost feed is not the same as a feed that never started: the lamp
+   goes amber and says so, without hiding the last known numbers */
+.chip[data-t="init"] .led{ background:var(--amber); box-shadow:0 0 8px var(--amber-dim); animation:led 1.5s var(--ease) infinite; }
+.chip[data-t="init"]{ color:var(--amber); border-color:var(--amber-dim); }
+.chip[data-t="poll"]{ color:var(--amber); border-color:var(--amber-dim); }
+.chip[data-t="down"]{ color:var(--red); border-color:var(--crash-edge); }
+
 /* ── LOWER DECK ───────────────────────────────────────────── */
 .deck{ display:grid; grid-template-columns:1fr 1fr; gap:var(--gut); align-items:start; }
 
@@ -292,6 +337,81 @@ main{
   margin:0; font-size:9.5px; letter-spacing:.12em; text-transform:uppercase; color:var(--ink-3);
   text-align:right; max-width:40%;
 }
+
+/* ── THE COMMAND CHIP ─────────────────────────────────────────
+   The button is a real API call and the chip says which one, in
+   the same monospace the console writes SQL in. Clicking it hands
+   you the curl — the whole lab is reachable without this page. */
+.cmd{
+  flex:none; cursor:pointer; font-family:var(--mono);
+  display:inline-flex; align-items:center; gap:7px;
+  padding:7px 11px; border:1px solid var(--edge); border-radius:var(--r-sm);
+  background:var(--panel-2); color:var(--ink-3);
+  font-size:10px; letter-spacing:.1em; white-space:nowrap;
+  transition:border-color var(--t-fast) var(--ease), color var(--t-fast) var(--ease),
+    background var(--t-fast) var(--ease);
+}
+.cmd:hover{ background:var(--panel-2-hover); border-color:var(--edge-hot); color:var(--ink-2); }
+.cmd:active{ background:var(--panel-2-pressed); }
+.cmd__verb{ color:var(--amber); font-weight:700; letter-spacing:.12em; }
+.cmd__path{ color:var(--ink-2); }
+.cmd__ico{ width:12px; height:12px; flex:none; opacity:.6; }
+/* copied: the chip says so itself rather than firing a toast */
+.cmd.is-copied{ border-color:var(--green); color:var(--green); }
+.cmd.is-copied .cmd__verb,
+.cmd.is-copied .cmd__path{ color:var(--green); }
+.cmd.is-copied .cmd__ico{ opacity:0; }
+/* a refused clipboard is not a success — it gets the annotation colour,
+   which is what amber is for */
+.cmd.is-failed{ border-color:var(--amber-dim); color:var(--amber); }
+.cmd.is-failed .cmd__verb,
+.cmd.is-failed .cmd__path{ color:var(--amber); }
+.cmd.is-failed .cmd__ico{ opacity:0; }
+
+/* ═══ THE DIVERGENCE PROOF ══════════════════════════════════════
+   Two traces on one frame: the shape a healthy run holds, and the
+   shape this run actually took. Where they part is the finding —
+   marked once, with a tick and a single red pill. Everything else
+   stays monochrome so the one red thing is the one that matters.
+   Built from the run's own 250ms timeline; drawn only when there
+   is a timeline to draw. */
+.diverge{
+  position:relative; margin-top:var(--s4); padding-top:var(--s4);
+  border-top:1px solid var(--edge);
+  animation:chip var(--t-slow) var(--ease) 500ms both;
+}
+.diverge__head{
+  display:flex; align-items:baseline; justify-content:space-between; gap:var(--s3);
+  font-size:9.5px; letter-spacing:.15em; text-transform:uppercase; color:var(--ink-3);
+  margin-bottom:var(--s3);
+}
+.diverge__key{ display:flex; align-items:center; gap:var(--s3); flex-wrap:wrap; }
+.diverge__key i{ display:inline-flex; align-items:center; gap:5px; font-style:normal; }
+.diverge__key i::before{
+  content:""; width:14px; height:0; border-top:2px solid var(--ink-2); flex:none;
+}
+.diverge__key i.is-ref::before{ border-top-style:dashed; border-color:var(--ink-3); }
+.diverge__frame{ position:relative; }
+.diverge__frame svg{ display:block; width:100%; height:72px; overflow:visible; }
+.dv-ref{ fill:none; stroke:var(--ink-3); stroke-width:1.5; stroke-dasharray:4 4; opacity:.7; }
+.dv-run{ fill:none; stroke:var(--ink); stroke-width:2; stroke-linejoin:round; stroke-linecap:round; }
+.dv-fill{ fill:var(--tint-red); stroke:none; }
+.dv-tick{ stroke:var(--red); stroke-width:1.5; stroke-dasharray:2 3; }
+.diverge__pill{
+  position:absolute; top:-4px; transform:translateX(-50%);
+  font-size:9px; letter-spacing:.14em; text-transform:uppercase; white-space:nowrap;
+  padding:3px 8px; border-radius:var(--r-pill);
+  background:var(--red); color:var(--on-red); font-weight:700;
+  pointer-events:none;
+}
+.diverge__pill--safe{ background:var(--green); color:var(--on-green); }
+.diverge__foot{
+  margin:var(--s3) 0 0; font-family:var(--sans); font-size:12px; line-height:1.6; color:var(--ink-3);
+}
+/* the run trace draws itself in once, left to right — the same
+   gesture the sign-off pulse uses. It never animates on redraw. */
+.dv-run{ stroke-dasharray:1400; stroke-dashoffset:0; animation:dv-draw 900ms var(--ease) 560ms both; }
+@keyframes dv-draw{ from{ stroke-dashoffset:1400; } }
 
 /* ── REPORT ───────────────────────────────────────────────── */
 .report__body{
@@ -509,4 +629,12 @@ main{
   .panel__head{ flex-direction:column; align-items:flex-start; gap:var(--s1); }
   .panel__note{ text-align:left; }
   .console__hint{ max-width:none; }
+  /* the run button keeps the full width; the chip and the hint share
+     the line under it rather than crushing each other */
+  .console__foot{ flex-wrap:wrap; gap:var(--s2) var(--s3); }
+  .run{ flex:1 0 100%; }
+  .cmd{ font-size:9px; padding:6px 9px; }
+  .console__hint{ margin-left:auto; }
+  .await--plot{ font-size:9px; letter-spacing:.2em; padding:5px 10px; }
+  .diverge__head{ flex-direction:column; gap:var(--s2); }
 }

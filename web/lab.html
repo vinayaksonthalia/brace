@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-state="idle">
+<html lang="en" data-state="idle" data-feed="wait">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -57,7 +57,7 @@ document.documentElement.setAttribute('data-theme',t);})();</script>
 
     <a class="chip chip--back" href="index.html">←<span class="chip__t">brace</span></a>
     <span class="chip" id="mockChip" hidden>mock lab</span>
-    <span class="chip chip--link" id="transportChip" title="Live stats transport">
+    <span class="chip chip--link" id="transportChip" data-t="init" title="Live stats transport">
       <i class="led" aria-hidden="true"></i><span id="transportLabel">connecting</span>
     </span>
   </div>
@@ -88,6 +88,9 @@ document.documentElement.setAttribute('data-theme',t);})();</script>
     <div class="gauge">
       <h1 class="gauge__label">writes / sec</h1>
       <div class="gauge__value" id="wps" aria-live="off">0</div>
+      <!-- Until the first stats frame lands there is no number to show, so
+           the instrument says what it is doing instead of reading zero. -->
+      <div class="await await--gauge" aria-hidden="true"><i class="await__dot"></i>awaiting feed</div>
       <div class="gauge__base">baseline <b id="baseline">—</b> · window 60s</div>
     </div>
 
@@ -108,6 +111,7 @@ document.documentElement.setAttribute('data-theme',t);})();</script>
   <div class="plot">
     <canvas id="chart" aria-label="Writes per second over the last 60 seconds"></canvas>
     <div class="plot__flatline" id="flatline" aria-hidden="true">writes stopped</div>
+    <div class="await await--plot" aria-hidden="true"><i class="await__dot"></i>chamber idle · no trace yet</div>
   </div>
 
   <div class="rail-scale" aria-hidden="true">
@@ -115,10 +119,14 @@ document.documentElement.setAttribute('data-theme',t);})();</script>
   </div>
 
   <div class="strip" id="labels">
-    <div class="lab" data-label="checkout"><b>checkout</b><span class="lab__ok">0</span><span class="lab__died">0 died</span></div>
-    <div class="lab" data-label="login"><b>login</b><span class="lab__ok">0</span><span class="lab__died">0 died</span></div>
-    <div class="lab" data-label="add_to_cart"><b>add to cart</b><span class="lab__ok">0</span><span class="lab__died">0 died</span></div>
-    <div class="lab lab--total"><b>casualties</b><span class="lab__ok" id="casualties">0</span><span class="lab__died">writes killed</span></div>
+    <div class="lab" data-label="checkout"><b>checkout</b><span class="lab__ok">0</span><span class="lab__died">0 died</span>
+      <span class="await await--lab" aria-hidden="true"><i class="await__dot"></i>awaiting run</span></div>
+    <div class="lab" data-label="login"><b>login</b><span class="lab__ok">0</span><span class="lab__died">0 died</span>
+      <span class="await await--lab" aria-hidden="true"><i class="await__dot"></i>awaiting run</span></div>
+    <div class="lab" data-label="add_to_cart"><b>add to cart</b><span class="lab__ok">0</span><span class="lab__died">0 died</span>
+      <span class="await await--lab" aria-hidden="true"><i class="await__dot"></i>awaiting run</span></div>
+    <div class="lab lab--total"><b>casualties</b><span class="lab__ok" id="casualties">0</span><span class="lab__died">writes killed</span>
+      <span class="await await--lab" aria-hidden="true"><i class="await__dot"></i>none on record</span></div>
   </div>
 </section>
 
@@ -149,6 +157,17 @@ document.documentElement.setAttribute('data-theme',t);})();</script>
       <button type="button" class="run" id="runBtn">
         <span class="run__text">Run the crash test</span>
         <span class="run__spin" aria-hidden="true"></span>
+      </button>
+      <!-- This is a real command, not a toy: the chip names the call the
+           button makes, and hands you the curl for it. -->
+      <button type="button" class="cmd" id="cmdChip"
+              title="Copy the equivalent curl command">
+        <span class="cmd__verb">POST</span><span class="cmd__path">/api/run</span>
+        <svg class="cmd__ico" viewBox="0 0 24 24" aria-hidden="true" fill="none"
+             stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="9" y="9" width="11" height="11" rx="2"/>
+          <path d="M5 15V6a2 2 0 0 1 2-2h9"/>
+        </svg>
       </button>
       <p class="console__hint" id="runHint">Ctrl↵ to run</p>
     </div>
@@ -196,6 +215,7 @@ document.documentElement.setAttribute('data-theme',t);})();</script>
       <div class="metric__label">writes died on the twin — measured</div>
     </div>
     <ul class="mix" data-slot="mix"></ul>
+    <div class="diverge" data-slot="diverge" hidden></div>
     <div class="wreck" data-slot="wreckWrap" hidden>
       <span class="wreck__tag">wreckage left behind</span>
       <p class="wreck__text" data-slot="wreckText"></p>
@@ -224,6 +244,7 @@ document.documentElement.setAttribute('data-theme',t);})();</script>
       <li>traffic never dipped</li>
       <li>identical end state</li>
     </ul>
+    <div class="diverge" data-slot="diverge" hidden></div>
     <div class="wreck" data-slot="wreckWrap" hidden>
       <span class="wreck__tag">wreckage left behind</span>
       <p class="wreck__text" data-slot="wreckText"></p>
