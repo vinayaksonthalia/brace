@@ -16,7 +16,7 @@
 .topo{
   display:flex; align-items:center; justify-content:space-between; gap:var(--s3);
   flex-wrap:wrap;
-  padding:var(--s2) var(--gut);
+  padding:var(--s2) var(--edge-pad);
   border-bottom:1px solid var(--edge);
   background:var(--topo-bg);
   font-size:var(--t-micro); letter-spacing:.13em; text-transform:uppercase;
@@ -48,9 +48,14 @@
 .pool b{ color:var(--ink); }
 
 /* ── MAIN ─────────────────────────────────────────────────── */
+/* The lab shares the landing's canvas rule: one shell, one page
+   gutter, so the rail, the topology strip and the instruments all
+   sit on the same two vertical lines. Was a fixed 1320px, which
+   left ~300px dead on each side of a 1920 desktop. */
 main{
-  flex:1; padding:var(--gut); display:flex; flex-direction:column; gap:var(--gut);
-  max-width:1320px; width:100%; margin:0 auto;
+  flex:1; display:flex; flex-direction:column; gap:clamp(16px,1.6vw,28px);
+  padding:clamp(16px,1.8vw,32px) var(--pad-x) clamp(24px,2.4vw,40px);
+  max-width:var(--shell); width:100%; margin:0 auto;
 }
 
 /* ═══ THE CHAMBER ═══════════════════════════════════════════════
@@ -62,7 +67,7 @@ main{
 .chamber{
   position:relative;
   border:1px solid var(--edge);
-  border-radius:var(--r);
+  border-radius:var(--r-lg);
   background:linear-gradient(180deg, var(--panel), var(--panel-deep));
   box-shadow:var(--e1), var(--bezel);
   overflow:hidden;
@@ -254,14 +259,20 @@ main{
 .deck{ display:grid; grid-template-columns:1fr 1fr; gap:var(--gut); align-items:start; }
 
 .panel{
-  border:1px solid var(--edge); border-radius:var(--r);
+  border:1px solid var(--edge); border-radius:var(--r-lg);
   background:linear-gradient(180deg,var(--panel),var(--panel-deep));
   box-shadow:var(--e1), var(--bezel);
   display:flex; flex-direction:column; min-width:0;
 }
+/* Wide canvas: the console is the thing a judge types into, so it
+   takes the larger share. The report card holds the right rail at a
+   width where its dot-leader rows still read as a report. */
+@media (min-width:1200px){
+  .deck{ grid-template-columns:minmax(0,1.12fr) minmax(0,1fr); gap:clamp(16px,1.6vw,28px); }
+}
 .panel__head{
   display:flex; align-items:baseline; justify-content:space-between; gap:var(--s3);
-  padding:var(--s3) var(--gut); border-bottom:1px solid var(--edge);
+  padding:var(--s4) clamp(16px,1.6vw,26px); border-bottom:1px solid var(--edge);
 }
 .panel__head h2{
   margin:0; font-size:var(--t-label); font-weight:600; letter-spacing:var(--track-eyebrow);
@@ -620,6 +631,84 @@ main{
 .eta__unit{ font-size:18px; color:var(--amber); opacity:.65; }
 .eta__bar{ height:3px; background:var(--edge); border-radius:2px; overflow:hidden; }
 .eta__bar i{ display:block; height:100%; width:0%; background:var(--amber); transition:width .4s linear; }
+
+/* ═══ BRING YOUR OWN DATA — the self-host answer ════════════════
+   Answers the question the console provokes ("and my own tables?")
+   in the facility's own annotation register: amber eyebrow, an
+   amber calibration bracket, a single amber left edge on the panel.
+   The claim is set in sans because a person is explaining a design
+   decision; the env vars are mono because they are literal. */
+.byoc{
+  border:1px solid var(--edge); border-left:2px solid var(--amber-dim);
+  border-radius:var(--r-lg);
+  background:linear-gradient(180deg, var(--panel), var(--panel-deep));
+  box-shadow:var(--e1), var(--bezel);
+  padding:clamp(24px,2.6vw,40px) clamp(20px,2.4vw,40px);
+  display:grid; gap:clamp(24px,3vw,56px);
+}
+/* wide: the claim holds the left, the three steps stack on the right */
+@media (min-width:940px){
+  .byoc{ grid-template-columns:minmax(0,1.02fr) minmax(0,.98fr); align-items:start; }
+}
+
+.byoc__eyebrow{
+  display:flex; align-items:center; gap:var(--s3); margin-bottom:var(--s4);
+  font-size:var(--t-micro); letter-spacing:var(--track-eyebrow); text-transform:uppercase; color:var(--amber);
+}
+/* the calibration bracket — the same amber mark the landing's eyebrows carry */
+.byoc__eyebrow::before{
+  content:""; flex:none; width:var(--s5); height:5px;
+  border:1px solid var(--amber); border-top:0;
+}
+.byoc__eyebrow::after{
+  content:""; flex:1; height:1px; min-width:var(--s5);
+  background:linear-gradient(90deg, var(--amber-dim), transparent);
+}
+
+.byoc h2{
+  margin:0; font-family:var(--sans); font-weight:660; font-size:clamp(20px,2.3vw,29px);
+  line-height:1.14; letter-spacing:-.026em; color:var(--ink); text-wrap:balance; max-width:20ch;
+}
+.byoc__say{
+  margin:var(--s4) 0 0; font-family:var(--sans); font-size:var(--t-lede); line-height:1.68;
+  color:var(--ink-2); max-width:62ch;
+}
+.byoc__say em{ font-style:italic; color:var(--ink); }
+.byoc__say code,
+.byoc__step code{
+  font-family:var(--mono); font-size:.86em; color:var(--ink);
+  border:1px solid var(--edge); border-radius:var(--r-sm); padding:1px 5px; white-space:nowrap;
+}
+.byoc__foot{
+  margin:var(--s5) 0 0; display:flex; align-items:center; gap:var(--s3); flex-wrap:wrap;
+  font-size:9.5px; letter-spacing:.14em; text-transform:uppercase;
+}
+.byoc__foot a{
+  color:var(--ink-2); text-decoration:none; border-bottom:1px solid var(--edge-hot);
+  transition:color var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease);
+}
+.byoc__foot a:hover{ color:var(--ink); border-color:var(--amber); }
+.byoc__sep{ color:var(--ink-3); }
+
+.byoc__steps{ list-style:none; margin:0; padding:0; display:grid; gap:var(--s3); min-width:0; }
+.byoc__step{
+  display:grid; grid-template-columns:auto minmax(0,1fr); gap:var(--s4); align-items:start;
+  padding:var(--s4);
+  border:1px solid var(--edge); border-radius:var(--r-sm); background:var(--panel-2);
+  transition:border-color var(--t-mid) var(--ease);
+}
+.byoc__step:hover{ border-color:var(--edge-hot); }
+.byoc__n{
+  font-family:var(--mono); font-size:var(--t-micro); font-weight:700; letter-spacing:.1em;
+  color:var(--amber); padding-top:3px; font-variant-numeric:tabular-nums;
+}
+.byoc__step b{
+  display:block; font-family:var(--sans); font-size:var(--t-body); font-weight:650;
+  letter-spacing:-.006em; color:var(--ink);
+}
+.byoc__step p{
+  margin:5px 0 0; font-family:var(--sans); font-size:12.5px; line-height:1.6; color:var(--ink-3);
+}
 
 /* ── RESPONSIVE ───────────────────────────────────────────── */
 @media (max-width:900px){

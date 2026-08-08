@@ -87,7 +87,9 @@ document.documentElement.setAttribute('data-theme',t);})();</script>
   <div class="hero__inner reveal">
     <div class="hero__say">
       <p class="plate"><i>Specimen</i> your migration <i>Method</i> full-scale impact</p>
-      <h1 class="hero__pitch">The crash-test lab for database migrations.</h1>
+      <!-- the compound is kept whole: a line break after "crash-" is a
+           legal break opportunity in CSS and it wrecks the display setting -->
+      <h1 class="hero__pitch">The <span class="nb">crash-test</span> lab for database migrations.</h1>
       <p class="hero__sub">Watch your migration freeze production — on a crash-test dummy, before your users ever feel it.</p>
 
       <div class="hero__cta">
@@ -97,10 +99,13 @@ document.documentElement.setAttribute('data-theme',t);})();</script>
       <p class="hero__nofriction">No account. No signup. The lab is already running.</p>
     </div>
 
+    <!-- The instrument column. The disc and the live scope sit in the same
+         stack because they are the same event: the calibration assembly
+         plays once, the pulse loops, and the bloom is fired from landing.js
+         at the exact frame the scope beneath it flatlines. Adjacent, you can
+         actually see them crash together. -->
+    <div class="hero__stage">
     <div class="hero__disc" aria-hidden="true">
-      <!-- The calibration assembly plays once, then the pulse loops, and the
-           bloom is fired from landing.js at the exact frame the teaser below
-           flatlines — the mark and the live trace crash together. -->
       <svg class="hero__mark mark--hero" id="heroMark" viewBox="0 0 240 240">
         <defs><clipPath id="hm"><circle cx="120" cy="120" r="74"/></clipPath></defs>
         <g class="m-q m-q--on" clip-path="url(#hm)">
@@ -130,6 +135,19 @@ document.documentElement.setAttribute('data-theme',t);})();</script>
         </g>
       </svg>
       <span class="hero__disc-note" title="Impact centre: the moment in the trace where the migration takes its lock.">calibration disc · impact centre</span>
+    </div>
+
+    <!-- signature gesture: the pulse, and what happens to it -->
+    <figure class="teaser" aria-label="Live write traffic, freezing under a blocking migration">
+      <figcaption class="teaser__cap">
+        <span class="teaser__label" title="Specimen: the full-scale database clone the migration crashes into, not your real database.">writes / sec &nbsp;·&nbsp; live specimen</span>
+        <span class="teaser__state" id="teaserState">nominal</span>
+      </figcaption>
+      <canvas id="teaser" height="96"></canvas>
+      <div class="rail-scale" aria-hidden="true">
+        <b>−6s</b><b>−4.5</b><b>−3</b><b>−1.5</b><b class="rail-scale__now">now</b>
+      </div>
+    </figure>
     </div>
   </div>
 
@@ -172,17 +190,6 @@ document.documentElement.setAttribute('data-theme',t);})();</script>
     </div>
   </div>
 
-  <!-- signature gesture: the pulse, and what happens to it -->
-  <figure class="teaser reveal" aria-label="Live write traffic, freezing under a blocking migration">
-    <figcaption class="teaser__cap">
-      <span class="teaser__label" title="Specimen: the full-scale database clone the migration crashes into, not your real database.">writes / sec &nbsp;·&nbsp; live specimen</span>
-      <span class="teaser__state" id="teaserState">nominal</span>
-    </figcaption>
-    <canvas id="teaser" height="96"></canvas>
-    <div class="rail-scale" aria-hidden="true">
-      <b>−6s</b><b>−4.5</b><b>−3</b><b>−1.5</b><b class="rail-scale__now">now</b>
-    </div>
-  </figure>
 </section>
 
 <!-- ══ RECEIPTS ═══════════════════════════════════════════════
@@ -281,6 +288,14 @@ document.documentElement.setAttribute('data-theme',t);})();</script>
   </p>
 </section>
 
+<!-- ══ THE FACILITY BAND ══════════════════════════════════════
+     The second deliberate surface change on the page. Where the
+     incident band is amber (we are quoting somebody else), this one
+     is a half-step of the facility's own panel tone: the two
+     infrastructure sections read as one chapter, and the sections
+     either side of it get their edges back. -->
+<div class="band band--quiet">
+
 <!-- ══ ZEROPS ═════════════════════════════════════════════════ -->
 <section class="sec sec--zerops" data-sec="the facility">
   <header class="sec__head reveal">
@@ -314,7 +329,7 @@ document.documentElement.setAttribute('data-theme',t);})();</script>
      The self-host story's payoff. A synthetic table is a demo; the
      migration you are actually afraid of runs against your schema.
      Two environment variables, no fork, no recompile. -->
-<section class="sec sec--byod" data-sec="your data">
+<section class="sec sec--byod" id="byod" data-sec="your data">
   <header class="sec__head reveal">
     <span class="eyebrow">bring your own data</span>
     <h2>Rehearse against your schema, not ours.</h2>
@@ -353,6 +368,8 @@ BRACE_LOAD_LABELS: >-
 
   <p class="selfhost reveal">Brace runs inside your own infrastructure, so the dump never leaves it. The migration under test runs as <code>brace_migrator</code> and the load traffic as <code>brace_traffic</code> — both unprivileged, both owning nothing. <a href="https://github.com/vinayaksonthalia/brace/blob/main/docs/BYOD.md">Full walkthrough →</a></p>
 </section>
+
+</div><!-- /.band--quiet -->
 
 <!-- ══ CLOSE ══════════════════════════════════════════════════ -->
 <section class="close reveal" data-sec="sign-off">

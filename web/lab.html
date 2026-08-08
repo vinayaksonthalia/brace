@@ -197,6 +197,51 @@ document.documentElement.setAttribute('data-theme',t);})();</script>
   </section>
 
 </div>
+
+<!-- ══ BRING YOUR OWN DATA (SELF-HOST) ═════════════════════════
+     The console invites you to paste SQL, which provokes the obvious
+     next question — "and my own tables?" This panel answers it
+     honestly and without apology: the public rig is one shared,
+     synthetic database by design; your real schema is rehearsed by
+     self-hosting, where the dump never leaves your infrastructure.
+     Amber, because it is the facility annotating its own scope. -->
+<section class="byoc" aria-labelledby="byocHead">
+  <div class="byoc__lead">
+    <span class="byoc__eyebrow">bring your own data · self-host</span>
+    <h2 id="byocHead">This rig runs one synthetic dataset. Your data never touches it.</h2>
+    <p class="byoc__say">This public lab crashes every migration into the <em>same</em> shared, synthetic 10M-row <code>orders</code> table — so there is nowhere to upload your own schema here, on purpose. One lab cannot, and should not, clone a stranger's production database. To rehearse against <em>your</em> indexes, row widths and traffic, run Brace inside your own infrastructure, where the dump never leaves it.</p>
+    <p class="byoc__foot">
+      <a href="index.html#byod">Full walkthrough on the landing page</a>
+      <span class="byoc__sep" aria-hidden="true">·</span>
+      <a href="https://github.com/vinayaksonthalia/brace/blob/main/docs/BYOD.md" target="_blank" rel="noopener noreferrer">docs/BYOD.md →</a>
+    </p>
+  </div>
+
+  <ol class="byoc__steps">
+    <li class="byoc__step">
+      <span class="byoc__n">01</span>
+      <div>
+        <b>Import once</b>
+        <p>One <code>import.yml</code> stands up web · api · postgres on your own Zerops project.</p>
+      </div>
+    </li>
+    <li class="byoc__step">
+      <span class="byoc__n">02</span>
+      <div>
+        <b>Restore your dump as the template</b>
+        <p>Every throwaway twin is cloned from it. Turn synthetic seeding off with <code>BRACE_SEED=off</code>.</p>
+      </div>
+    </li>
+    <li class="byoc__step">
+      <span class="byoc__n">03</span>
+      <div>
+        <b>Describe your write traffic</b>
+        <p><code>BRACE_LOAD_LABELS</code> sets the mix, so casualties are measured against your real workload.</p>
+      </div>
+    </li>
+  </ol>
+</section>
+
 </main>
 
 <footer class="foot">

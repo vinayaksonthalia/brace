@@ -33,7 +33,7 @@
   /* ── INK ──────────────────────────────────────────────────── */
   --ink:       #e8eef6;
   --ink-2:     #94a5b9;
-  --ink-3:     #74839a;   /* AA on --panel; the old value was 3.2:1 */
+  --ink-3:     #7a8aa0;   /* AA on the LIGHTEST surface it lands on (--panel-2, 4.9:1); comfortably AA on --panel/--floor */
 
   /* ── AMBER — the facility's own colour ────────────────────── */
   --amber:      #e8a33f;
@@ -116,9 +116,12 @@
   --t-label:   11px;   /* chrome labels, panel heads              */
   --t-body:    13px;   /* dense prose                             */
   --t-lede:    15px;   /* lede prose                              */
-  --t-h3:      18px;
-  --t-h2:      clamp(22px, 3.4vw, 32px);
-  --t-display: clamp(29px, 4.5vw, 46px);
+  --t-h3:      19px;
+  /* The size cliff. Reference-grade marketing pages run display at
+     57–78px and section heads at 29–40px; the 20–28px "medium
+     heading" band is dead air and nothing lives in it. */
+  --t-h2:      clamp(26px, 3.3vw, 40px);
+  --t-display: clamp(33px, 5.2vw, 68px);
 
   /* Tracking is a function of size: the bigger the type, the tighter it
      is set. Uppercase mono chrome runs the other way and opens up. */
@@ -132,10 +135,23 @@
   /* ── SPACE — strict 4px rhythm ────────────────────────────── */
   --s1:4px;  --s2:8px;  --s3:12px; --s4:16px; --s5:24px;
   --s6:32px; --s7:48px; --s8:64px; --s9:96px; --s10:128px;
+
+  /* --gut is the INSTRUMENT gutter: the inset inside a panel, a rail
+     or a scope. It stays small at every width because an instrument
+     face does not grow its own margins.
+     --pad-x is the PAGE gutter: the distance from content to the
+     viewport edge, and it does scale — 16px on a phone, 64px on a
+     1920 desktop, the way every reference site runs it.
+     --shell is the outer bound of the document's content column. */
   --gut: var(--s4);
+  --pad-x: clamp(16px, 3.2vw, 64px);
+  --shell: 1560px;
+  /* Page chrome (top rail, footer) aligns to the same column as the
+     sections: page gutter, plus whatever the shell leaves over. */
+  --edge-pad: max(var(--pad-x), calc((100% - var(--shell)) / 2 + var(--pad-x)));
 
   /* ── SHAPE ────────────────────────────────────────────────── */
-  --r-xs:2px; --r-sm:4px; --r:6px; --r-lg:8px; --r-pill:100px;
+  --r-xs:2px; --r-sm:4px; --r:6px; --r-lg:12px; --r-xl:16px; --r-pill:100px;
 
   /* ── MOTION — two curves, doing two different jobs ───────────
      --ease        every simultaneous state change (hover, colour,
@@ -240,7 +256,11 @@ html{
   background:var(--floor); color-scheme:dark;
   scrollbar-color:var(--edge-hot) transparent;
   scrollbar-width:thin;
+  /* the top rail is sticky on both pages — in-page and cross-document
+     anchors must clear it instead of hiding beneath it (§9.3) */
+  scroll-padding-top:84px;
 }
+@media (max-width:640px){ html{ scroll-padding-top:68px; } }
 :root[data-theme="light"]{ color-scheme:light; }
 
 ::selection{ background:var(--sel); color:var(--sel-ink); }
@@ -308,7 +328,7 @@ body{
 /* ── TOP RAIL ─────────────────────────────────────────────── */
 .rail{
   display:flex; align-items:center; justify-content:space-between; gap:var(--s3);
-  padding:var(--s3) var(--gut);
+  padding:var(--s3) var(--edge-pad);
   border-bottom:1px solid var(--edge);
   background:var(--rail-bg);
   backdrop-filter:blur(8px);
@@ -437,7 +457,7 @@ body{
 
 /* ── FOOT ─────────────────────────────────────────────────── */
 .foot{
-  padding:var(--s4) var(--gut) var(--s6); text-align:center;
+  padding:var(--s4) var(--edge-pad) var(--s6); text-align:center;
   font-size:var(--t-micro); letter-spacing:.16em; text-transform:uppercase; color:var(--ink-3);
   border-top:1px solid var(--edge);
 }

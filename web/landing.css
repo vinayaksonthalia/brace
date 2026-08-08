@@ -10,7 +10,24 @@
    the pulse, where they mean something.
    ═══════════════════════════════════════════════════════════════ */
 
-.landing{ --measure:1120px; --prose:62ch; }
+/* ═══ THE CANVAS RULE ═══════════════════════════════════════════
+   Container wide, measure narrow. The document column runs to
+   --shell (1560px) so the surface always reaches the canvas at
+   desktop widths; the READING measure is then constrained inside
+   it to --prose. A narrow column on a narrow page is the single
+   most reliable tell of an amateur layout — the fix is never to
+   stretch the prose, it is to widen the surface underneath it and
+   let the prose sit in a column of that surface.
+   ─────────────────────────────────────────────────────────────── */
+.landing{
+  --measure:var(--shell);
+  --prose:68ch;
+  /* the landing's prose runs one notch larger than the lab's dense
+     readouts — this is a page you read, not an instrument you scan */
+  --t-body:14px;
+  --t-lede:17px;
+  --rhythm:clamp(72px, 8.4vw, 124px);   /* section-to-section */
+}
 .landing main{ width:100%; }
 
 .landing .rail{ position:sticky; top:0; z-index:20; }
@@ -34,13 +51,26 @@
    can actually read what it is — a target with the signal running
    through it, silent at impact centre. That is the whole product
    in one glyph, so it gets the room. */
-.hero{ padding:clamp(40px,7vw,88px) var(--gut) 0; }
+/* The hero owns the first screen. Rail height is subtracted so the
+   claim, the instrument and the gate compose against the fold
+   instead of sitting in the top third with dead space beneath. */
+.hero{
+  padding:clamp(40px,6vw,80px) var(--pad-x) clamp(24px,4vw,56px);
+  min-height:calc(100svh - 66px);
+  display:flex; flex-direction:column; justify-content:center;
+}
+/* Left: the claim, at display size. Right: the instrument column —
+   the calibration disc stacked on the live scope. The instrument
+   column is the WIDER of the two, the way every reference hero
+   runs it: the running artifact earns the canvas, the copy sits in
+   a comfortable measure beside it. */
 .hero__inner{
   max-width:var(--measure); margin:0 auto;
-  display:grid; gap:var(--s7);
-  grid-template-columns:minmax(0,1.2fr) minmax(0,.8fr);
+  display:grid; gap:clamp(40px,4.5vw,80px);
+  grid-template-columns:minmax(0,1fr) minmax(0,1.06fr);
   align-items:center;
 }
+.hero__stage{ display:flex; flex-direction:column; gap:var(--s5); min-width:0; }
 
 /* the spec plate — an engineering report header, not a badge */
 .plate{
@@ -58,15 +88,22 @@
 .plate i + i,
 .plate i:not(:first-child){ margin-left:var(--s4); padding-left:var(--s4); border-left:1px solid var(--edge); }
 
+/* The one mono display on the site. At 68px the counters open up and
+   it stops reading as a terminal and starts reading as stencilled
+   plant signage — which is the register we want. Leading goes sub-1
+   because at this size the ascenders carry the rhythm. */
 .hero__pitch{
-  margin:0; max-width:23ch;
+  margin:0; max-width:15ch;
   font-family:var(--mono);
-  font-size:var(--t-display); line-height:1.03; font-weight:700;
+  font-size:var(--t-display); line-height:.98; font-weight:700;
   letter-spacing:var(--track-display); color:var(--ink);
+  text-wrap:balance;
 }
+.hero__pitch .nb{ white-space:nowrap; }
 .hero__sub{
-  margin:var(--s5) 0 0; max-width:52ch;
-  font-family:var(--sans); font-size:clamp(15px,1.8vw,18px); line-height:1.6; color:var(--ink-2);
+  margin:var(--s5) 0 0; max-width:46ch;
+  font-family:var(--sans); font-size:clamp(16px,1.35vw,21px); line-height:1.55; color:var(--ink-2);
+  letter-spacing:-.006em;
 }
 
 .hero__cta{ display:flex; gap:var(--s3); flex-wrap:wrap; margin-top:var(--s6); }
@@ -93,7 +130,7 @@
 
 /* the disc, annotated like a lab photograph */
 .hero__disc{ display:flex; flex-direction:column; align-items:center; gap:var(--s4); }
-.hero__mark{ width:min(100%,268px); height:auto; overflow:visible; }
+.hero__mark{ width:min(100%,232px); height:auto; overflow:visible; }
 .mark__tick{ stroke:var(--amber); opacity:.9; }
 .hero__disc-note{
   font-size:9px; letter-spacing:.24em; text-transform:uppercase; color:var(--ink-3);
@@ -109,17 +146,17 @@
    it, IS the product — so the diagram makes you look at it.
    Red and green here are verdicts, which is what they are for. */
 .gate{
-  max-width:var(--measure); margin:clamp(32px,5vw,56px) auto 0;
-  border:1px solid var(--edge); border-radius:var(--r);
+  max-width:var(--measure); margin:clamp(40px,6vw,80px) auto 0;
+  border:1px solid var(--edge); border-radius:var(--r-lg);
   background:linear-gradient(180deg,var(--panel),var(--panel-deep));
   box-shadow:var(--e1), var(--bezel);
-  padding:var(--s5) var(--gut);
+  padding:clamp(20px,2.2vw,32px) clamp(20px,2.4vw,40px);
   display:grid; gap:0;
 }
 .gate__row{
   position:relative;
   display:flex; align-items:baseline; gap:var(--s4);
-  padding:var(--s3) 0 var(--s3) var(--s4);
+  padding:var(--s3) 0 var(--s3) var(--s5);
   min-width:0;
 }
 /* the verdict stripe: 2px, the full height of its own row */
@@ -140,7 +177,7 @@
   letter-spacing:var(--track-label); text-transform:uppercase; color:var(--ink-2);
 }
 .gate__fact{
-  font-size:clamp(13px,1.7vw,16px); letter-spacing:.02em; color:var(--ink-3);
+  font-size:clamp(14px,1.25vw,19px); letter-spacing:.01em; color:var(--ink-2);
   font-variant-numeric:tabular-nums;
 }
 .gate__fact i{ font-style:normal; font-weight:700; letter-spacing:-.015em; }
@@ -201,11 +238,12 @@
 }
 .loop__step{
   position:relative; min-width:0;
-  display:flex; flex-direction:column; gap:5px;
-  padding:var(--s4) var(--s3);
-  border:1px solid var(--edge); border-radius:var(--r-sm);
+  display:flex; flex-direction:column; gap:6px;
+  padding:var(--s4) var(--s4) var(--s5);
+  border:1px solid var(--edge); border-radius:var(--r);
   background:var(--panel);
-  transition:border-color var(--t-mid) var(--ease);
+  box-shadow:var(--bezel);
+  transition:border-color var(--t-mid) var(--ease), background var(--t-mid) var(--ease);
 }
 .loop__step + .loop__step{ margin-left:var(--s5); }
 /* the rail: a hairline with an arrowhead, between every pair */
@@ -217,7 +255,7 @@
   content:""; position:absolute; left:-7px; top:50%; transform:translateY(-50%);
   border-left:5px solid var(--edge-hot); border-top:3.5px solid transparent; border-bottom:3.5px solid transparent;
 }
-.loop__step:hover{ border-color:var(--edge-hot); }
+.loop__step:hover{ border-color:var(--edge-hot); background:var(--panel-2); }
 .loop__no{
   font-size:9px; letter-spacing:.2em; color:var(--amber); font-variant-numeric:tabular-nums;
 }
@@ -235,13 +273,16 @@
    top and bottom — no new colour enters the system. It marks the
    receipts as the section that is quoting somebody else. */
 .band{
-  position:relative; width:100%; margin-top:clamp(48px,7vw,80px);
+  position:relative; width:100%; margin-top:var(--rhythm);
   border-top:1px solid var(--amber-dim); border-bottom:1px solid var(--amber-dim);
   background:
     linear-gradient(180deg, var(--amber-wash), var(--amber-wash)),
     var(--floor);
   padding-bottom:clamp(48px,7vw,72px);
 }
+/* the hero already reserves a full screen and pads its own bottom —
+   the band that follows it must not add a second rhythm on top */
+.hero + .band{ margin-top:clamp(16px,2.5vw,40px); }
 .band .sec{ padding-top:clamp(48px,7vw,72px); }
 /* inside the band the receipts are ruled by amber hairlines instead of
    the 1px-gap grid, so the band shows through them */
@@ -252,6 +293,31 @@
 .band .receipt{ background:transparent; }
 .band .receipt + .receipt{ border-left:1px solid var(--amber-dim); }
 .band .receipts__note{ color:var(--ink-2); }
+
+/* ── the facility band ────────────────────────────────────────
+   The second surface change, and the quieter one: a half-step of
+   the panel tone rather than a colour. It groups the two
+   infrastructure sections into one chapter and gives the sections
+   either side of it a visible edge. Depth by surface, not shadow. */
+/* The band is a step DOWN from the floor in both themes — recessed,
+   not lifted — so every panel inside it keeps its existing --panel
+   fill and still reads as an instrument sitting in a bay. */
+.band--quiet{
+  --band-floor:#04070b;
+  border-color:var(--edge);
+  background:var(--band-floor);
+  padding-bottom:clamp(56px,7vw,96px);
+}
+:root[data-theme="light"] .band--quiet{ --band-floor:#e2e7ef; }
+.band--quiet .sec{ padding-top:clamp(56px,7vw,96px); }
+.band--quiet .sec + .sec{ padding-top:var(--rhythm); }
+/* the receipts pattern reuses --floor as its own cell fill; inside a
+   band that fill has to follow the band */
+.band--quiet .receipt{ background:var(--band-floor); }
+/* a band already supplies its own bottom breathing room — the next
+   section must not pay for it twice */
+.band + .close,
+.band + .sec{ margin-top:clamp(40px,4vw,64px); padding-top:clamp(40px,4vw,64px); }
 
 /* ═══ THE SECTION RAIL ══════════════════════════════════════════
    A fixed report index in the top-right corner: [03/06] › THE
@@ -275,10 +341,10 @@
 
 /* ── TEASER (the brand gesture, with a real axis under it) ─── */
 .teaser{
-  margin:clamp(40px,6vw,72px) auto 0; max-width:var(--measure);
-  border:1px solid var(--edge); border-radius:var(--r);
+  margin:0; width:100%;
+  border:1px solid var(--edge); border-radius:var(--r-lg);
   background:linear-gradient(180deg,var(--panel),var(--panel-deep));
-  box-shadow:var(--e1), var(--bezel);
+  box-shadow:var(--e2), var(--bezel);
   overflow:hidden;
   padding-bottom:var(--s3);
 }
@@ -290,11 +356,26 @@
 .teaser__state{ color:var(--green); transition:color var(--t-slow) var(--ease); }
 .teaser__state::before{ content:"state "; color:var(--ink-3); }
 .teaser__state[data-hurt="1"]{ color:var(--red); }
-#teaser{ display:block; width:100%; height:96px; }
+#teaser{ display:block; width:100%; height:132px; }
 
 /* ═══ SECTIONS ══════════════════════════════════════════════════ */
-.sec{ max-width:var(--measure); margin:0 auto; padding:clamp(64px,9vw,96px) var(--gut) 0; }
-.sec__head{ max-width:none; }
+.sec{ max-width:var(--measure); margin:0 auto; padding:var(--rhythm) var(--pad-x) 0; }
+
+/* The section header is a two-column masthead at desktop: the eyebrow
+   and the h2 hold the left, the lede sits beside them rather than
+   under them. It stops every section opening with three stacked
+   left-aligned blocks and a dead right half. */
+.sec__head{
+  max-width:none;
+  display:grid; gap:var(--s5) clamp(32px,4vw,72px);
+  grid-template-columns:minmax(0,1fr);
+}
+@media (min-width:1000px){
+  .sec__head{ grid-template-columns:minmax(0,1.05fr) minmax(0,1fr); align-items:end; }
+  .sec__head .eyebrow{ grid-column:1 / -1; margin-bottom:0; }
+  .sec__head h2{ margin-bottom:0; }
+  .sec__lede{ margin-top:0; padding-bottom:.35em; }
+}
 
 /* the dimension callout — a tick, a label, and a leader running
    out to the edge of the measurement. Every section is annotated
@@ -314,8 +395,9 @@
 }
 
 .sec__head h2, .close h2{
-  margin:0; max-width:22ch; font-family:var(--sans); font-weight:650;
-  font-size:var(--t-h2); line-height:1.14; letter-spacing:var(--track-tight); color:var(--ink);
+  margin:0; max-width:20ch; font-family:var(--sans); font-weight:680;
+  font-size:var(--t-h2); line-height:1.08; letter-spacing:-.032em; color:var(--ink);
+  text-wrap:balance;
 }
 .sec__lede{
   margin:var(--s5) 0 0; max-width:var(--prose);
@@ -326,7 +408,7 @@
 .steps{
   list-style:none; margin:var(--s7) 0 0; padding:0;
   display:grid; gap:1px; background:var(--edge);
-  border:1px solid var(--edge); border-radius:var(--r);
+  border:1px solid var(--edge); border-radius:var(--r-lg);
   grid-template-columns:repeat(2,1fr); overflow:hidden;
   box-shadow:var(--e1), var(--bezel);
 }
@@ -340,6 +422,7 @@
   transition:transform var(--t-slow) var(--ease);
 }
 .step:hover{ background:var(--panel-2); }
+.step h3{ text-wrap:balance; }
 .step:hover::before{ transform:scaleY(1); }
 
 /* the phase number as a stamped plate, the way a rig stamps a run */
@@ -353,7 +436,16 @@
   margin:0 0 var(--s3); font-family:var(--sans); font-size:var(--t-h3); font-weight:650;
   letter-spacing:-.012em; color:var(--ink);
 }
-.step p{ margin:0; font-family:var(--sans); font-size:var(--t-body); line-height:1.72; color:var(--ink-2); max-width:46ch; }
+.step p{ margin:0; font-family:var(--sans); font-size:var(--t-body); line-height:1.7; color:var(--ink-2); max-width:46ch; }
+
+/* Four phases, four columns. At 2×2 in a 1432px content column each
+   card was 700px wide holding a 46ch paragraph — half of every card
+   was empty. Four across is the same information at the width it
+   actually wants. */
+@media (min-width:1180px){
+  .steps{ grid-template-columns:repeat(4,minmax(0,1fr)); }
+  .step{ padding:clamp(28px,2.6vw,40px) clamp(20px,1.8vw,28px); }
+}
 
 /* ── RECEIPTS ─────────────────────────────────────────────────
    Evidence in an engineering-report register: three columns ruled
@@ -371,14 +463,14 @@
 .receipt:not(:first-child){ padding-left:var(--s5); }
 /* the years are the argument: 2024, 2025, 2026 — it keeps happening */
 .receipt__year{
-  font-family:var(--mono); font-size:var(--t-h3); font-weight:700;
+  font-family:var(--mono); font-size:22px; font-weight:700;
   letter-spacing:.02em; color:var(--amber);
 }
 .receipt blockquote{ flex:1; }
 .receipt__src{ margin-top:auto; }
 .receipt blockquote{
-  margin:0; font-family:var(--sans); font-size:var(--t-lede); line-height:1.55;
-  letter-spacing:-.008em; color:var(--ink);
+  margin:0; font-family:var(--sans); font-size:clamp(16px,1.32vw,21px); line-height:1.42;
+  letter-spacing:-.018em; font-weight:520; color:var(--ink); text-wrap:balance;
 }
 .receipt blockquote::before{ content:"“"; color:var(--amber); }
 .receipt blockquote::after{ content:"”"; color:var(--amber); }
@@ -397,13 +489,28 @@
 
 /* ── THE CLAIM ────────────────────────────────────────────── */
 .claim{
-  max-width:var(--measure); margin:clamp(64px,9vw,96px) auto 0; padding:0 var(--gut);
+  max-width:var(--measure); margin:var(--rhythm) auto 0; padding:0 var(--pad-x);
 }
 .claim__line{
-  margin:0; max-width:24ch;
-  font-family:var(--sans); font-weight:650;
-  font-size:clamp(24px,4.2vw,42px); line-height:1.16; letter-spacing:var(--track-tight); color:var(--ink-3);
+  margin:0; max-width:22ch;
+  font-family:var(--sans); font-weight:680;
+  font-size:clamp(26px,3.4vw,46px); line-height:1.1; letter-spacing:-.032em; color:var(--ink-3);
   border-left:2px solid var(--amber); padding-left:clamp(16px,3vw,32px);
+}
+
+/* The claim is the page's one editorial pull-quote. At desktop the
+   statement holds the left and the honest-about-the-neighbours
+   footnote sits beside it, so the section is a spread rather than a
+   short line with an empty right half. */
+@media (min-width:1000px){
+  .claim{
+    display:grid; align-items:start;
+    grid-template-columns:minmax(0,1fr) minmax(0,.92fr);
+    column-gap:clamp(48px,5vw,96px);
+  }
+  .claim__line{ grid-row:1 / span 2; }
+  .claim__foot{ margin-top:0; padding-left:0; }
+  .claim__prior{ padding-left:0; }
 }
 .claim__line b{ color:var(--ink); font-weight:650; }
 .claim__foot{ margin:var(--s6) 0 0; padding-left:clamp(16px,3vw,34px); }
@@ -419,15 +526,26 @@
 
 /* ── ZEROPS ───────────────────────────────────────────────── */
 .topo--big{
-  margin-top:var(--s7); display:block; padding:var(--s6) var(--s5);
-  border:1px solid var(--edge); border-radius:var(--r);
+  margin-top:var(--s7); display:block; padding:clamp(28px,3vw,44px) clamp(20px,2.4vw,40px);
+  border:1px solid var(--edge); border-radius:var(--r-lg);
   background:linear-gradient(180deg,var(--panel),var(--panel-deep));
   box-shadow:var(--e1), var(--bezel);
 }
-.topo--big .topo__flow{ display:flex; align-items:center; gap:0; margin:0; padding:0; list-style:none; flex-wrap:wrap; row-gap:var(--s3); }
+.topo--big .topo__flow{ display:flex; align-items:stretch; gap:0; margin:0; padding:0; list-style:none; flex-wrap:wrap; row-gap:var(--s3); }
 .topo--big .node{
-  display:flex; flex-direction:column; gap:3px;
-  padding:var(--s3) var(--s4); border:1px solid var(--edge); border-radius:var(--r-sm); background:var(--panel-2);
+  display:flex; flex-direction:column; justify-content:center; gap:5px;
+  padding:var(--s4) var(--s5); border:1px solid var(--edge); border-radius:var(--r); background:var(--panel-2);
+  transition:border-color var(--t-mid) var(--ease);
+}
+.topo--big .node:hover{ border-color:var(--edge-hot); }
+/* Three services across the full instrument face — the diagram is
+   the width of the thing it describes, not a huddle on the left. */
+@media (min-width:900px){
+  .topo--big .topo__flow{ flex-wrap:nowrap; }
+  .topo--big .node{ flex:1 1 0; min-width:0; }
+  .topo--big .node + .node{ margin-left:clamp(48px,5vw,88px); }
+  .topo--big .node + .node::before{ left:calc(-1 * clamp(48px,5vw,88px) + 4px); width:calc(clamp(48px,5vw,88px) - 12px); }
+  .topo--big .node + .node::after{ left:-9px; }
 }
 .topo--big .node b{ font-size:var(--t-label); letter-spacing:var(--track-label); text-transform:uppercase; color:var(--ink); }
 .topo--big .node span{ font-size:9.5px; letter-spacing:.12em; text-transform:uppercase; color:var(--ink-3); }
@@ -462,20 +580,26 @@
   display:grid; gap:var(--s5);
 }
 .byod__step{
-  display:grid; grid-template-columns:auto 1fr; gap:var(--s4);
+  /* minmax(0,1fr), not 1fr: the code block's `white-space:pre` gives the
+     track a min-content width of the longest line, which blew the page
+     out horizontally at phone widths */
+  display:grid; grid-template-columns:auto minmax(0,1fr); gap:var(--s4);
   align-items:start;
-  padding:var(--s5); border:1px solid var(--edge); border-radius:var(--r);
+  padding:clamp(24px,2.6vw,40px); border:1px solid var(--edge); border-radius:var(--r-lg);
   background:linear-gradient(180deg,var(--panel),var(--panel-deep));
   box-shadow:var(--e1), var(--bezel);
+  transition:border-color var(--t-mid) var(--ease), box-shadow var(--t-mid) var(--ease), transform var(--t-mid) var(--ease);
 }
+.byod__step:hover{ border-color:var(--edge-hot); box-shadow:var(--e2), var(--bezel); transform:translateY(-2px); }
 .byod__n{
   font-family:var(--mono); font-size:11px; font-weight:700;
   letter-spacing:var(--track-label); color:var(--ink-3);
   padding-top:2px;
 }
+.byod__body{ min-width:0; }
 .byod__body h3{
-  margin:0; font-family:var(--sans); font-size:var(--t-h3);
-  line-height:1.3; color:var(--ink);
+  margin:0; font-family:var(--sans); font-size:var(--t-h3); font-weight:640;
+  line-height:1.3; letter-spacing:-.014em; color:var(--ink);
 }
 .byod__body > p{
   margin:var(--s3) 0 0; font-family:var(--sans); font-size:var(--t-body);
@@ -489,18 +613,34 @@
   overflow-x:auto;
 }
 .byod__code code{
-  font-family:var(--mono); font-size:12px; line-height:1.75;
+  font-family:var(--mono); font-size:12.5px; line-height:1.8;
   color:var(--ink-2); white-space:pre; display:block;
+}
+
+/* Instruction left, the command you actually paste on the right.
+   The step whose payload is prose rather than a shell block keeps a
+   single column, so the grid never opens a hole. */
+@media (min-width:1080px){
+  .byod__body{
+    display:grid; align-items:start;
+    grid-template-columns:minmax(0,.82fr) minmax(0,1.18fr);
+    column-gap:clamp(32px,3.4vw,56px); row-gap:var(--s3);
+  }
+  .byod__body h3,
+  .byod__body > p{ grid-column:1; }
+  .byod__code{ grid-column:2; grid-row:1 / span 2; margin-top:0; align-self:stretch; }
+  .byod__step:not(:has(.byod__code)) .byod__body{ grid-template-columns:minmax(0,1fr); }
+  .byod__step:not(:has(.byod__code)) .byod__body > p{ max-width:78ch; }
 }
 
 /* ── CLOSE ────────────────────────────────────────────────── */
 .close{
-  max-width:var(--measure); margin:clamp(72px,10vw,112px) auto 0;
-  padding:clamp(48px,6vw,64px) var(--gut); text-align:center;
+  max-width:var(--measure); margin:var(--rhythm) auto 0;
+  padding:clamp(56px,7vw,96px) var(--pad-x); text-align:center;
   border-top:1px solid var(--edge);
 }
-.close h2{ max-width:none; }
-.close p{ margin:var(--s4) 0 var(--s6); font-family:var(--sans); font-size:var(--t-lede); color:var(--ink-2); }
+.close h2{ max-width:none; font-size:clamp(30px,4.2vw,56px); }
+.close p{ margin:var(--s4) auto var(--s7); max-width:52ch; font-family:var(--sans); font-size:clamp(16px,1.3vw,20px); line-height:1.55; color:var(--ink-2); }
 
 /* ═══ SIGN-OFF ══════════════════════════════════════════════════
    The page's emotional close. Full-bleed: the lab's own trace runs
@@ -589,12 +729,17 @@
 .foot__link:hover{ color:var(--ink); border-color:var(--ink-2); }
 
 /* ── RESPONSIVE ───────────────────────────────────────────── */
-@media (max-width:920px){
+/* Below the two-column threshold the instrument column drops under
+   the claim and the disc shrinks to a plate-sized mark beside its
+   own annotation, so the hero still opens with the sentence. */
+@media (max-width:1140px){
   .hero__inner{ grid-template-columns:1fr; gap:var(--s6); }
-  .hero__disc{ order:-1; align-items:flex-start; }
-  .hero__mark{ width:min(100%,148px); }
+  .hero__stage{ gap:var(--s4); }
+  .hero__disc{ flex-direction:row; align-items:center; justify-content:flex-start; gap:var(--s4); }
+  .hero__mark{ width:min(100%,84px); }
   .hero__disc-note::before{ display:none; }
-  .hero__pitch{ max-width:18ch; }
+  .hero__pitch{ max-width:16ch; }
+  #teaser{ height:112px; }
 }
 @media (max-width:860px){
   .receipts{ grid-template-columns:1fr; }
@@ -639,7 +784,8 @@
   .foot--landing{ flex-direction:column; text-align:center; }
 }
 @media (max-width:640px){
-  .hero__pitch{ max-width:15ch; }
+  .hero__pitch{ max-width:13ch; }
+  #teaser{ height:96px; }
   .step{ padding:var(--s5) var(--s4); }
   .claim__line{ padding-left:var(--s4); }
   .claim__prior, .claim__foot{ padding-left:var(--s4); }
