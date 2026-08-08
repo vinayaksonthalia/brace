@@ -274,14 +274,38 @@ def check_migration(
         if row_count > 0:
             payload["row_count"] = row_count
 
-    try:
-        r = requests.post(f"{API}/api/run", json=payload, timeout=30)
-    except requests.RequestException as e:
-        return {"verdict": "ERRORED", "reason": f"could not reach the lab: {e}"}
-    try:
-        body = r.json()
-    except ValueError:
-        body = {}
+    # One wait budget covers BOTH the warm-up wait and the run itself, so
+    # wait_seconds means what it says: "block up to this long for a result."
+    overall_deadline = time.time() + max(0, wait_seconds)
+    while True:
+        try:
+            r = requests.post(f"{API}/api/run", json=payload, timeout=30)
+        except requests.RequestException as e:
+            return {"verdict": "ERRORED", "reason": f"could not reach the lab: {e}"}
+        try:
+            body = r.json()
+        except ValueError:
+            body = {}
+
+        # No warm twin yet (503) or another run in progress (409) are transient, not
+        # failures. Rather than bail instantly, wait within wait_seconds and resubmit
+        # — so a cold or busy lab blocks for a real result instead of making the
+        # agent hand-poll. Only give up (returning the typed status) if the budget
+        # runs out.
+        if r.status_code in (503, 409):
+            remaining = overall_deadline - time.time()
+            if remaining <= 1:
+                if r.status_code == 409:
+                    return {"verdict": "BUSY", "reason": "another crash test is running; retry shortly"}
+                eta = body.get("eta_seconds", 45) or 45
+                return {"verdict": "WARMING", "reason": f"no warm twin; next in ~{float(eta):.0f}s"}
+            if r.status_code == 409:
+                nap = 5.0
+            else:
+                nap = min(float(body.get("eta_seconds", 8) or 8) + 1, 15.0)
+            time.sleep(min(nap, remaining))
+            continue
+        break
 
     if r.status_code == 429:
         return {
@@ -310,12 +334,12 @@ def check_migration(
             return result
         # Any other 400 is a refusal, INCLUDING a static shape whose target
         # relation does not exist — which the lab now rejects instead of blessing
-        # SAFE. Not a measurement, and clearly not safe.
-        return {"verdict": "REJECTED", "reason": body.get("reason"), "suggestion": body.get("suggestion")}
-    if r.status_code == 409:
-        return {"verdict": "BUSY", "reason": "another crash test is running; retry shortly"}
-    if r.status_code == 503:
-        return {"verdict": "WARMING", "reason": f"no warm twin; next in ~{body.get('eta_seconds', 60):.0f}s"}
+        # SAFE. Not a measurement, and clearly not safe. A refusal has no "fix", so
+        # suggestion is only present when the engine genuinely has an example.
+        rej = {"verdict": "REJECTED", "reason": body.get("reason")}
+        if body.get("suggestion"):
+            rej["suggestion"] = body["suggestion"]
+        return rej
     if r.status_code >= 400 or "run_id" not in body:
         # Never let an unexpected status raise out of the tool; report it plainly.
         return {
@@ -324,8 +348,7 @@ def check_migration(
         }
 
     run_id = body["run_id"]
-    deadline = time.time() + max(0, wait_seconds)
-    while time.time() < deadline:
+    while time.time() < overall_deadline:
         time.sleep(3)
         result = _finished_result(run_id)
         if result is not None:

@@ -27,6 +27,13 @@ import "fmt"
 // "shorter than this instrument can resolve" — see MeasuredAtFloor.
 const scaleFloorSeconds = 0.25
 
+// highExtrapolationRatio is the target/twin size multiple beyond which a linear
+// projection is honestly a guess wearing a measurement's clothes: a 2x is
+// credible, a 200x is arithmetic far past what one measurement can vouch for. At
+// or above this ratio the note says so out loud instead of printing a single
+// confident number.
+const highExtrapolationRatio = 20.0
+
 // maxTargetRows bounds the operator-supplied production row count. A trillion
 // rows is already far beyond any single unpartitioned Postgres table; past it
 // the caller has fat-fingered a number and a projection built on it would be
@@ -285,6 +292,15 @@ func scaleWarning(measured string, p ScaleProjection) string {
 		// saying "your table" about a number Brace invented would be a lie.
 		target = fmt.Sprintf("a %s-row table (ASSUMED — nobody told Brace your real size)", commas(p.TargetRows))
 		tail = "Pass target_rows (or set BRACE_TARGET_ROWS) to project onto your actual table instead of this assumption."
+	}
+	if ratio := float64(p.TargetRows) / float64(p.TwinRows); ratio >= highExtrapolationRatio {
+		// A 2x projection is credible; a 200x one is arithmetic far past what one
+		// measurement can vouch for. Say so, so the projected number reads as an
+		// order-of-magnitude flag, not a precise figure printed under the same banner.
+		tail = fmt.Sprintf("This is a %s linear extrapolation from a much smaller sample — treat the projected "+
+			"duration as an order of magnitude, not a precise number: index and rewrite cost grows faster than "+
+			"linearly, and a table this size behaves differently (checkpointing, autovacuum, memory). %s",
+			ratioText(p.TwinRows, p.TargetRows), tail)
 	}
 	return fmt.Sprintf(
 		"SAFE on this %s-row twin (%s), but %s is %s larger: expect %s of blocked writes. "+

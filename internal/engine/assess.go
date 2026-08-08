@@ -239,8 +239,9 @@ func Assess(sql string) (*Assessment, error) {
 		return nil, &RejectedError{
 			Kind: RejectRejected,
 			Code: "multi_statement",
-			Reason: "Brace rehearses exactly one statement per run, because the whole output — the freeze window, " +
-				"the casualty count — is attributed to a single statement. Submit them one at a time.",
+			Reason: "Brace attributes one freeze window and casualty count to one statement, so a single sql field " +
+				"must contain exactly one statement. Submit them one at a time — or, to rehearse a whole migration " +
+				"script in order on one twin, pass them as statements: [ … ] instead of sql.",
 		}
 	}
 
@@ -256,9 +257,10 @@ func Assess(sql string) (*Assessment, error) {
 		return nil, &RejectedError{
 			Kind: RejectRejected,
 			Code: "not_allowlisted",
-			Reason: "Brace rehearses schema changes: CREATE INDEX, DROP INDEX, ALTER TABLE, ALTER INDEX, REINDEX, " +
-				"VACUUM, ANALYZE and COMMENT ON. That statement is not one of them, so there is no lock story to tell.",
-			Suggestion: "CREATE INDEX idx_orders_customer_id ON orders (customer_id);",
+			Reason: "Brace rehearses the schema-change shapes it can measure a freeze for under live write traffic: " +
+				"CREATE INDEX, DROP INDEX, ALTER TABLE, ALTER INDEX, REINDEX, VACUUM, ANALYZE and COMMENT ON. That " +
+				"statement is not one of them — it is out of scope for this lab, which does not mean it is harmless in " +
+				"production (a TRUNCATE or a bare DELETE can still take a heavy lock; Brace just does not model it here).",
 		}
 	}
 
@@ -278,7 +280,7 @@ func Assess(sql string) (*Assessment, error) {
 			Kind:           RejectAlreadySafe,
 			Code:           string(class),
 			Reason:         lesson.Explanation,
-			Suggestion:     firstNonEmpty(lesson.Suggestion, "CREATE INDEX idx_orders_customer_id ON orders (customer_id);"),
+			Suggestion:     lesson.Suggestion,
 			Classification: class,
 		}
 		// An already_safe shape that still takes ACCESS EXCLUSIVE (metadata-only ADD
