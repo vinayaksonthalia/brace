@@ -119,12 +119,14 @@ flowchart TB
             TWIN1[("twin (disposable)")]
         end
 
+        MCPSVC["mcp — python@3.12\nFastMCP over HTTP"]
         WEBSVC["web — static dashboard"]
     end
 
     WEB --> API
     CLI --> API
-    AGENT --> API
+    AGENT -->|"check_migration"| MCPSVC
+    MCPSVC -->|"http://api:8080\nprivate network"| API
     API --> ENGINE
     ENGINE --> TWINS
     TWINS -->|clone| TEMPLATE
@@ -136,7 +138,7 @@ flowchart TB
     WEBSVC --> API
 ```
 
-Private network between `web` / `api` / `db`; the api service is the only thing that ever holds `BRACE_ADMIN_URL` (the superuser DSN, injected from the `db` service's Zerops-managed reference, never checked into git). One `import.yml` stands up all three services; nothing about self-hosting requires forking the code.
+Four Zerops services from one `import.yml` — `api` (Go engine), `web` (static dashboard), `mcp` (hosted MCP endpoint), `db` (Postgres 16, dedicated vCPU) — on a private network. The `api` service is the only thing that ever holds `BRACE_ADMIN_URL` (the superuser DSN, injected from the `db` service's Zerops-managed reference, never checked into git); the `mcp` service reaches the engine only at `http://api:8080` over the private network, with no path to the database except through the same allow-listed, rate-limited engine a browser hits. Nothing about self-hosting requires forking the code. **Engine or MCP changes require redeploying both `api` and `mcp`** — they are separate services.
 
 ## Security model
 
@@ -184,7 +186,7 @@ This is the real-world lock-acquisition cascade — the outage pattern nobody el
 |---|---|---|
 | **Web lab** | No login, presets or your own DDL, live charts | [`/lab.html`](https://web-2a61.prg1.zerops.app/lab.html) |
 | **`brace-check`** | The CI/deploy gate — exit 0 SAFE, exit 1 UNSAFE, exit 2 rejected/error | `cmd/brace-check` — `brace-check -f migration.sql [-target-rows N]` |
-| **MCP verb** | `check_migration(sql, target_rows, hostile)` + `get_result(run_id)` for a coding agent to call before it deploys a schema change | hosted, or `mcp/server.py` |
+| **MCP verb** | `check_migration(sql \| statements[], target_rows, hostile, deadline_ms)` + `get_result(run_id)` for a coding agent to call before it deploys a schema change | hosted, or `mcp/server.py` |
 
 The MCP verb is the one that matters for Zerops' "infrastructure for coding agents" thesis: an agent that can write a migration in seconds should be able to ask "will this hurt?" in the same breath, against a real production-scale rehearsal — not a linter's guess.
 
@@ -195,6 +197,8 @@ claude mcp add --transport http brace https://mcp-2a61-8080.prg1.zerops.app/mcp
 ```
 
 Then just ask: *"use brace to check `ALTER TABLE orders ADD COLUMN promo int` before I ship it — with hostile mode on."* It runs a real rehearsal and refuses to ship an outage. `check_migration` returns `effective_verdict` (SAFE/UNSAFE/INCONCLUSIVE/ERRORED, plus REJECTED / RATE_LIMITED / PENDING for a strict gate); a slow migration returns a `run_id` you fetch with `get_result` — no result is ever lost to a timeout, and a nonexistent table is REJECTED, never SAFE. (Or run `mcp/server.py` locally over stdio, or self-hosted against your own database — see [docs/BYOD.md](docs/BYOD.md).)
+
+**A whole migration script, not one statement.** Pass `statements=[...]` (an ordered list, ≤10) instead of `sql` and Brace runs the sequence **on one twin**, so a later step sees the schema the earlier steps produced — a `CREATE INDEX` on a column the sequence just added no longer ERRORs the way two separate runs would. Each step is measured in its own window; the top-level verdict is the **worst-of**, so gating on `effective_verdict` blocks the deploy if *any* step would freeze writes, and the per-statement array shows *which* step is the killer. **Match your own deadline** with `deadline_ms`: a casualty is a write that waited past a deadline, so `casualties.deadline_ms` reflects *your* app's real per-request lock timeout, not just the lab default.
 
 ## Teach layer
 

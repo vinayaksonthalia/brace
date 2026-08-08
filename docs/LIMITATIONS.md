@@ -60,13 +60,19 @@ transaction — not your real concurrency — and if the migration's lock never
 actually conflicts with the hold, the run reports `contention_not_engaged`
 rather than inventing a freeze.
 
-## One statement at a time
+## Sequences run; rollout coordination doesn't
 
-Brace measures a single DDL statement per run. Multi-statement migrations,
-transactional DDL blocks, and application-level coordination (dual writes,
-backfill jobs, feature-flag cutover) are out of scope — each individual
-schema-changing statement in such a migration can be rehearsed on its own,
-but the sequencing and timing between them is not.
+Brace measures a single DDL statement **or** an ordered multi-statement
+sequence (pass `statements=[...]`, up to 10) on one twin — each step runs in
+order so a later step sees the schema the earlier steps produced, and each is
+measured in its own window with a per-statement verdict plus a worst-of overall.
+What stays out of scope is the application-level coordination *around* a
+migration — dual writes, batched backfill jobs, feature-flag cutover — and long
+transactional DDL blocks. Brace tells you what each DDL step does to live
+writes; it does not orchestrate the rollout around it. Hostile mode cannot be
+combined with a sequence (a sequence can't hold one contended lock across the
+whole script); rehearse the single statement whose acquisition wait you care
+about on its own with `hostile=true`.
 
 ## `CREATE INDEX CONCURRENTLY` has its own failure mode
 

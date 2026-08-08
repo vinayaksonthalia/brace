@@ -227,8 +227,8 @@ CREATE INDEX CONCURRENTLY idx_orders_customer_id ON orders (customer_id);</pre>
       </figure>
 
       <div class="callout">
-        <span class="callout__mark">one statement per run</span>
-        <p>Brace measures a single statement per run. Some safe rewrites are a <em>sequence</em> — for a <code>NOT NULL</code> column without a table rewrite you add the column nullable, backfill in batches, then <code>ADD CONSTRAINT … CHECK (col IS NOT NULL) NOT VALID</code> followed by <code>VALIDATE CONSTRAINT</code>. Rehearse each such step on its own; that is a conceptual pattern, not one measured lab result.</p>
+        <span class="callout__mark">a statement, or a sequence</span>
+        <p>A run is one statement <em>or</em> an ordered <strong>sequence</strong>. A real migration is usually a script — add a column, then index it; add a <code>NOT VALID</code> constraint, then <code>VALIDATE</code> it. Pass <code>statements: [ … ]</code> and Brace runs them in order <strong>on one twin</strong>, so a later step sees the schema the earlier steps produced (a <code>CREATE INDEX</code> on a column the sequence just added would ERROR as two separate runs, because each single run gets a fresh clone). It reports a per-statement verdict plus the <strong>worst-of</strong> overall — so a deploy gate blocks if <em>any</em> step would freeze writes, and you see exactly which step is the killer. Up to 10 steps, via the <a href="#mcp">MCP</a> or <a href="#api">API</a>; the web lab runs one statement at a time.</p>
       </div>
     </section>
 
@@ -542,18 +542,39 @@ brace-check -target-rows 500000000 -f migration.sql</pre>
 
       <div class="doc-code">
         <div class="doc-code__cap"><b>the verb an agent calls</b></div>
-<pre>check_migration(sql, target_rows=0, hostile=false)
+<pre>check_migration(sql, target_rows=0, hostile=false,
+                statements=[], deadline_ms=0, wait_seconds=45)
 <span class="c"># returns JSON the agent can branch on:</span>
 <span class="c">#   effective_verdict  → gate on THIS: worst-of measured + projected</span>
 <span class="c">#   verdict            → what was measured on the twin alone</span>
 <span class="c">#   blocked_seconds    → how long writes froze</span>
 <span class="c">#   casualties         → real writes killed, broken out by label</span>
+<span class="c">#   statements         → per-step results, when you passed a sequence</span>
 <span class="c">#   suggestion         → the safe rewrite, on an UNSAFE verdict</span>
 <span class="c">#   qualifier / note   → what this run did NOT establish, in words</span>
 <span class="c">#   contention         → whether hostile mode's hold actually engaged</span>
 <span class="c"># — so the agent can refuse to ship a locking migration.</span></pre>
       </div>
       <p>It returns the same verdict, casualties and suggested rewrite the web lab shows — as JSON — so a coding agent can gate its own output the way CI gates a human's. Always branch on <code>effective_verdict</code>, never on <code>verdict</code>: <code>verdict</code> is only what the twin measured, while <code>effective_verdict</code> also folds in the projection onto your real <code>target_rows</code>, so a change can read <code>SAFE</code> on the twin and <code>UNSAFE</code> at your scale.</p>
+
+      <h3>A whole migration script, not one statement</h3>
+      <p>Real migrations are files, not single statements. Pass <code>statements</code> — an ordered list — and Brace runs them <strong>in order on one twin</strong>, so a later step sees the schema the earlier steps produced. Every step passes the <em>same</em> allow-list a single run does (a sequence can't smuggle a non-allow-listed verb), it is capped at 10 steps, and the top-level <code>verdict</code>/<code>effective_verdict</code> are the <strong>worst-of</strong> — so gating on <code>effective_verdict</code> blocks the deploy if <em>any</em> step would freeze writes.</p>
+      <div class="doc-code">
+        <div class="doc-code__cap"><b>verify a multi-step rewrite as the script it actually is</b></div>
+<pre>check_migration(statements=[
+  "ALTER TABLE orders ADD COLUMN promo int",
+  "CREATE INDEX idx_orders_promo ON orders (promo)"   <span class="c"># depends on step 1</span>
+])
+<span class="c"># → verdict: "UNSAFE"  (worst-of; the CREATE INDEX froze writes)</span>
+<span class="c"># → statements: [</span>
+<span class="c">#     { index:0, verdict:"SAFE",   blocked_seconds:0,    … },</span>
+<span class="c">#     { index:1, verdict:"UNSAFE", blocked_seconds:27.8, casualties:{…} } ]</span>
+<span class="c"># each step measured in its own window — you see WHICH step is the killer.</span></pre>
+      </div>
+      <p>A step that is SAFE only because nothing was holding the table — a metadata-only <code>ACCESS EXCLUSIVE</code> shape that got its lock instantly — still carries <code>qualifier: "acquisition_not_simulated"</code> in its per-statement result, exactly as a single run would. <code>hostile</code> can't combine with <code>statements</code> (a sequence can't hold one contended lock across the whole script); to measure a step's acquisition wait, run that one statement on its own with <code>hostile=true</code>.</p>
+
+      <h3>Match your application's real deadline</h3>
+      <p>A "casualty" is a write that waited longer than a deadline and was killed — so the count depends on <em>which</em> deadline. Pass <code>deadline_ms</code> to set it to your application's real per-request lock timeout (the wait after which your own client gives up), and <code>casualties.deadline_ms</code> comes back reflecting your environment rather than the lab default. The freeze <em>duration</em> is the same regardless; only who survives it changes.</p>
 
       <h3>Slow migrations: PENDING, then get_result</h3>
       <p>A real migration can outlive the client's tool timeout. <code>CREATE INDEX CONCURRENTLY</code>, table rewrites and <code>ALTER COLUMN … TYPE</code> routinely run 40–90&nbsp;seconds, longer than the ~60&nbsp;s budget most MCP clients allow. So <code>check_migration</code> never holds the call open past its <code>wait_seconds</code> (default 45): when the rehearsal is still running at the deadline it returns a <em>recoverable</em> status rather than losing the run —</p>
@@ -582,7 +603,7 @@ result = get_result(run_id)
             <tr><td><code>INCONCLUSIVE</code></td><td>Aborted before it could finish (e.g. never acquired its lock in budget). Not a pass.</td></tr>
             <tr><td><code>ERRORED</code></td><td>The statement could not execute at all (bad SQL, permission denied, a run that failed before measurement). Never safe.</td></tr>
             <tr><td><code>SAFE</code> · <code>statically_safe</code></td><td>The <em>already_safe</em> fast path: a catalog-only shape (<code>ADD COLUMN</code> with a constant default, <code>ANALYZE</code>, <code>COMMENT</code>) proven safe by shape without a run. If it still takes <code>ACCESS EXCLUSIVE</code> it carries <code>qualifier: "acquisition_not_simulated"</code> — its acquisition wait was not simulated; re-run with <code>hostile=true</code>.</td></tr>
-            <tr><td><code>REJECTED</code></td><td>The lab will not run this statement (not a migration, multi-statement, too long, or a target relation that does not exist). See <code>reason</code> / <code>suggestion</code>. Treat as not-safe.</td></tr>
+            <tr><td><code>REJECTED</code></td><td>The lab will not run this input (not a migration, more than one statement crammed into a single <code>sql</code> field — use <code>statements: [ … ]</code> for a sequence — too long, or a target relation that does not exist). See <code>reason</code> / <code>suggestion</code>. Treat as not-safe.</td></tr>
             <tr><td><code>RATE_LIMITED</code></td><td>Too many runs — a graceful 429, never a raw HTTP error. Retry after <code>retry_after_seconds</code>.</td></tr>
             <tr><td><code>BUSY</code></td><td>Another crash test is in progress; retry shortly.</td></tr>
             <tr><td><code>WARMING</code></td><td>No warm twin yet; retry after the ETA in <code>reason</code>.</td></tr>
@@ -732,7 +753,7 @@ pg_restore -U &lt;superuser&gt; -d brace_template your-dump.dump</pre>
       <div class="api">
         <div class="api-row">
           <div class="api-sig"><span class="api-verb api-verb--post">post</span><span class="api-path">/api/run</span></div>
-          <p class="api-desc">Rehearse one migration. Body: <code>{ sql, mode?, target_rows?, hostile? }</code>. A run takes about ten seconds, so the call does not hold the request open: it returns <code>202 { run_id }</code> on admission, then the completed report card is read back from <code>GET /api/stats</code> as <code>last_run</code> and pushed live over the SSE stream. Everything else is a typed rejection with a <code>reason</code> — no raw or unexplained errors (see the status map below). A statement whose target relation does not exist is <strong>rejected</strong>, never blessed <code>SAFE</code>.</p>
+          <p class="api-desc">Rehearse one migration — or a whole script. Body: <code>{ sql, mode?, target_rows?, hostile?, lock_timeout_ms?, statements?, schema_ddl?, row_count? }</code>. Pass <code>statements: [ … ]</code> (an ordered array, ≤10) instead of <code>sql</code> to run a <strong>sequence</strong> on one twin; pass <code>schema_ddl</code> to rehearse against <a href="#byod">your own <code>CREATE TABLE</code></a>; <code>lock_timeout_ms</code> sets the per-request deadline a casualty is counted against. A run takes about ten seconds, so the call does not hold the request open: it returns <code>202 { run_id }</code> on admission, then the completed report card is read back from <code>GET /api/stats</code> as <code>last_run</code> and pushed live over the SSE stream. Everything else is a typed rejection with a <code>reason</code> — no raw or unexplained errors (see the status map below). A statement whose target relation does not exist is <strong>rejected</strong>, never blessed <code>SAFE</code>; <code>hostile</code> combined with <code>statements</code> is rejected too.</p>
         </div>
         <div class="api-row">
           <div class="api-sig"><span class="api-verb api-verb--get">get</span><span class="api-path">/api/stats</span></div>
@@ -768,7 +789,7 @@ pg_restore -U &lt;superuser&gt; -d brace_template your-dump.dump</pre>
           <tbody>
             <tr><td class="num">202</td><td><code>{ run_id }</code> — admitted; read the result from <code>/api/stats</code></td><td><span class="pill pill--green">SAFE / UNSAFE / …</span></td></tr>
             <tr><td class="num">400</td><td><code>{ error:"rejected", kind:"already_safe", reason }</code> — proven safe by shape, no run</td><td><span class="pill pill--green">SAFE · statically_safe</span></td></tr>
-            <tr><td class="num">400</td><td><code>{ error:"rejected", kind:"rejected", reason, suggestion? }</code> — not a migration, multi-statement, too long, or a <strong>nonexistent target relation</strong></td><td><span class="pill pill--red">REJECTED</span></td></tr>
+            <tr><td class="num">400</td><td><code>{ error:"rejected", kind:"rejected", reason, suggestion? }</code> — not a migration, multiple statements in one <code>sql</code> field (use <code>statements[]</code>), too long, or a <strong>nonexistent target relation</strong></td><td><span class="pill pill--red">REJECTED</span></td></tr>
             <tr><td class="num">413</td><td><code>{ error:"rejected", reason }</code> — body over the size cap</td><td><span class="pill pill--red">REJECTED</span></td></tr>
             <tr><td class="num">429</td><td><code>{ error:"rate_limited" }</code> + <code>Retry-After</code> header</td><td><span class="pill pill--amber">RATE_LIMITED</span></td></tr>
             <tr><td class="num">409</td><td><code>{ error:"run_in_progress" }</code></td><td><span class="pill pill--amber">BUSY</span></td></tr>
@@ -794,8 +815,8 @@ pg_restore -U &lt;superuser&gt; -d brace_template your-dump.dump</pre>
       <h3>The projection is a linear model</h3>
       <p>Scale projection multiplies a measured freeze by a row-count ratio. It has not been validated across arbitrary index types, fill factors, or hardware, and it is labelled an assumption wherever it appears — never a second measurement.</p>
 
-      <h3>One statement at a time</h3>
-      <p>Brace measures a single DDL statement per run. Multi-statement migrations, transactional DDL blocks, and application-level coordination (dual writes, backfills, feature-flag cutover) are out of scope — each statement can be rehearsed on its own, but the sequencing between them is not.</p>
+      <h3>Sequences run; rollout coordination doesn't</h3>
+      <p>Brace measures a single statement <em>or</em> an ordered multi-statement <a href="#what">sequence</a> on one twin (up to 10 steps), each step measured in its own window. What stays out of scope is the application-level coordination <em>around</em> a migration — dual writes, batched backfills, feature-flag cutover — and long transactional DDL blocks. Brace tells you what each DDL step does to live writes; it does not orchestrate the rollout around it.</p>
 
       <h3>The public lab is synthetic</h3>
       <p>Row values, timestamps and label statements in the stock seed are generated, not sampled from a real dataset, so planner behaviour can differ from a production table with real data skew even at the same row count. If that is what you're rehearsing, <a href="#byod">bring your own dump</a>.</p>
@@ -809,21 +830,45 @@ pg_restore -U &lt;superuser&gt; -d brace_template your-dump.dump</pre>
 
     <!-- ══ 12 · WHY ZEROPS ══════════════════════════════════════ -->
     <section class="doc-sec reveal" id="zerops" data-title="Why Zerops">
-      <p class="eyebrow">Why Zerops</p>
-      <h2>What Brace needs from its infrastructure.</h2>
+      <p class="eyebrow">Architecture · Why Zerops</p>
+      <h2>What Brace needs from its infrastructure — and how Zerops provides it.</h2>
 
-      <p><strong class="lead-in">The hard requirement:</strong> Brace needs a Postgres it is <strong>superuser</strong> on. It creates and drops twin databases on every single run, and it clones them with native <code>CREATE DATABASE … TEMPLATE</code> — and most managed Postgres offerings allow neither. That is exactly what <a href="https://zerops.io" target="_blank" rel="noopener noreferrer">Zerops</a> hands you natively, rather than hiding it.</p>
+      <p><strong class="lead-in">The hard requirement:</strong> Brace needs a Postgres it is <strong>superuser</strong> on. It creates and drops databases on every single run and clones them with native <code>CREATE DATABASE … TEMPLATE</code> — and most managed Postgres offerings allow neither (no superuser, no arbitrary <code>CREATE DATABASE</code>, no <code>TEMPLATE</code> from a live db). <a href="https://zerops.io" target="_blank" rel="noopener noreferrer">Zerops</a> gives you a real Postgres you own, not a locked-down slice — which is the one thing that makes the whole twin mechanism possible.</p>
 
-      <p>Around that, Brace uses three more things Zerops provides directly:</p>
+      <h3>The four services</h3>
+      <p>Brace is not one box; it is four Zerops services stood up from a single <code>import.yml</code>, each doing one job:</p>
+      <div class="doc-tablewrap">
+        <table class="doc-table">
+          <thead><tr><th>Service</th><th>Runtime</th><th>Job</th></tr></thead>
+          <tbody>
+            <tr><td><code>api</code></td><td>Go (<code>go@1</code>)</td><td>The engine. Clones the twin, drives the labelled load, runs the migration, watches <code>pg_locks</code>, computes the verdict, streams SSE.</td></tr>
+            <tr><td><code>web</code></td><td>static</td><td>The dashboard and this manual — plain HTML/CSS/JS, no build step, served straight off Zerops' static runtime.</td></tr>
+            <tr><td><code>mcp</code></td><td>Python (<code>python@3.12</code>)</td><td>The hosted <a href="#mcp">MCP endpoint</a> (FastMCP over streamable HTTP). A thin client that turns an agent's <code>check_migration</code> call into an <code>api</code> request over the private network.</td></tr>
+            <tr><td><code>db</code></td><td>PostgreSQL 16</td><td>The lab's Postgres, on <strong>dedicated vCPU</strong>. Holds the seeded template and every throwaway twin.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>The private network is the security boundary</h3>
+      <p>The services talk over Zerops' <strong>private network</strong>, and that is not a convenience — it is the security model. The <code>db</code> is never exposed publicly; the superuser DSN lives only inside the project and is never in git. The <code>mcp</code> service reaches the engine at <code>http://api:8080</code> by service name, so the endpoint a stranger's agent connects to has no path to the database except through the same allow-listed, rate-limited engine a browser hits. The role boundary does the rest: your SQL runs as <code>brace_migrator</code> and load as <code>brace_traffic</code>, both <code>NOSUPERUSER</code> — see <a href="#byod">the self-host security notes</a>.</p>
+
+      <h3>Why the database has dedicated vCPU</h3>
+      <p>This is the one place the $65 credit is deliberately spent, and it is load-bearing for the demo. The naive run wants <em>high</em> write load so the freeze is punchy; but <code>CREATE INDEX CONCURRENTLY</code> does two full heap scans, and on a shared core those scans starve the writers — the "safe" line sags under the very load that makes the naive line dramatic. Give <code>db</code> its own 2–3 vCPU and the concurrent build has a core the writers aren't fighting for: the naive run still craters and the safe run stays <em>flat under the same load</em>. The whole naive-vs-safe contrast — the money shot — depends on this.</p>
+
+      <h3>The twin lifecycle Zerops makes cheap</h3>
+      <p>Because Brace owns the Postgres, the twin mechanism is native and fast: a permanent <code>brace_template</code> (seeded, <code>ALLOW_CONNECTIONS false</code> so a stray connection can never block a clone) is copied with <code>CREATE DATABASE … TEMPLATE</code> in well under a second, kept in a small <strong>warm pool</strong> so a run starts instantly, and torn down with <code>DROP DATABASE … WITH (FORCE)</code> the moment it finishes. Orphaned twins from a crashed run are swept on startup. Every crash happens on a physical copy that is dropped when the run ends — nothing real is ever at risk.</p>
+
+      <h3>What building on Zerops actually cost — honestly</h3>
+      <p>Two real edges, because a stack page that only lists wins isn't a stack page:</p>
       <ul>
-        <li>A <strong>Go runtime</strong> for the engine that orchestrates the clone, the load, and the measurement.</li>
-        <li><strong>Private networking</strong> between <code>web</code>, <code>api</code> and <code>db</code>, so the superuser DSN never leaves the private network and is never checked into git.</li>
-        <li><strong>One-file self-host</strong> — a single <code>import.yml</code> stands up all three services, which is what makes bring-your-own-data a two-variable change instead of a fork.</li>
+        <li>The platform proxy turned the MCP's <code>POST /mcp/</code> into a <code>307 → GET /mcp</code> and broke the streamable-HTTP handshake. The fix is an ASGI path-normalising wrapper that serves both <code>/mcp</code> and <code>/mcp/</code> directly — so the remote endpoint works whether or not the client sends the trailing slash.</li>
+        <li>A service isn't reachable on its public subdomain until subdomain access is explicitly enabled (<code>zcli service enable-subdomain</code>); the private-network name works immediately, the public URL needs that one extra step. Worth knowing before you go looking for a URL that isn't on yet.</li>
       </ul>
+      <p>Deploys are per-service and scriptable — <code>zcli push --serviceId … --setup &lt;name&gt;</code> — which is what made a fix→deploy→verify loop tight enough to iterate on all weekend. The one trap: the engine and the MCP are <em>separate</em> services, so an engine fix isn't live for agents until <strong>both</strong> <code>api</code> and <code>mcp</code> are redeployed.</p>
 
       <div class="callout">
-        <span class="callout__mark">not lock-in</span>
-        <p>None of this is proprietary. Brace is standard Go and PostgreSQL 16 with no vendor APIs, so it runs anywhere those two do. Zerops is where it is <em>easy</em>, not where it is <em>trapped</em>.</p>
+        <span class="callout__mark">easy here, not trapped here</span>
+        <p>None of this is proprietary. Brace is standard Go, static assets, Python and PostgreSQL 16 with no vendor APIs, so it runs anywhere those do — a single <code>import.yml</code> stands up all four services, which is exactly what makes <a href="#byod">bring-your-own-data</a> a two-variable change instead of a fork. Zerops is where Brace is <em>easy</em>, not where it is <em>locked in</em>.</p>
       </div>
     </section>
 
