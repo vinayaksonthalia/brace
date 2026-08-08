@@ -697,6 +697,29 @@ func (m *Manager) Acquire(ctx context.Context) (*Twin, error) {
 	return t, nil
 }
 
+// WarmTwinDSN returns the admin DSN of a twin that is currently warm, WITHOUT
+// checking it out of the pool. It exists for cheap, read-only catalog peeks —
+// "does this relation exist in the lab's data?" — that must cost neither an
+// 80-second clone nor an Acquire that would deny a real run its twin. Twins are
+// exact clones of the template, so a warm twin's catalog IS the template's.
+//
+// The second return is false when the pool is momentarily empty or the Manager
+// is closed; the caller must read that as "cannot answer right now", never as a
+// fact about the database.
+//
+// A peeked twin is not reserved: a concurrent Acquire may hand it to a run and a
+// later Release will drop it out from under a peeker. A caller that connects to
+// the returned DSN must therefore tolerate the database vanishing mid-query and
+// treat a connection failure as an unanswerable check, not as absence.
+func (m *Manager) WarmTwinDSN() (string, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed || len(m.warm) == 0 {
+		return "", false
+	}
+	return m.warm[0].DSN, true
+}
+
 // Release destroys the twin and triggers a refill. Releasing the same twin
 // twice is a harmless no-op; releasing a twin this Manager never issued is an
 // error, because Release issues DROP DATABASE on the name it is handed.

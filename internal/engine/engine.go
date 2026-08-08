@@ -621,7 +621,13 @@ func (e *Engine) Rehearse(ctx context.Context, sql string, mode Mode, opts ...Ru
 		// run on an already_safe shape that still takes ACCESS EXCLUSIVE is let
 		// through to a real rehearsal, because MEASURING that acquisition freeze
 		// is the entire point of hostile mode.
-		return nil, err
+		//
+		// gateAlreadySafe is the second carve-out, in the other direction: an
+		// already_safe answer for a statement whose target relation does not exist
+		// is downgraded to a clear REJECTED, so a typo'd or absent table can never
+		// short-circuit to SAFE without ever running. It is a no-op for every other
+		// rejection.
+		return nil, e.gateAlreadySafe(ctx, as, err)
 	}
 
 	runID, err := newRunID()
@@ -698,8 +704,17 @@ func (e *Engine) resolveOptions(opts []RunOption) runOptions {
 // would, or the two disagree. The decisive case is hostile mode: without it, a
 // hostile run on an already_safe ACCESS EXCLUSIVE shape would be refused here
 // before it could measure the very freeze hostile mode exists to expose.
-func (e *Engine) AssessRun(sql string, opts ...RunOption) (*Assessment, error) {
-	return assessForRun(sql, e.resolveOptions(opts))
+//
+// It takes a context because it now runs the already_safe existence gate (a
+// cheap catalog peek at a warm twin), so an already_safe answer for a
+// nonexistent relation becomes a REJECTED on the very request that submitted it,
+// exactly as Rehearse would decide.
+func (e *Engine) AssessRun(ctx context.Context, sql string, opts ...RunOption) (*Assessment, error) {
+	as, err := assessForRun(sql, e.resolveOptions(opts))
+	if err != nil {
+		return as, e.gateAlreadySafe(ctx, as, err)
+	}
+	return as, nil
 }
 
 // assessForRun is Assess plus the hostile carve-out. Assess turns away the

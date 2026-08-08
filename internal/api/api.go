@@ -725,13 +725,15 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The pre-check. AssessRun is pure and cheap, and running it here rather than
-	// only inside the goroutine is what lets a bad statement come back as a 400
-	// on the very request that submitted it. It must be AssessRun, not Assess, so
-	// this synchronous check honours the run's options — above all hostile mode,
-	// which is allowed past the already_safe fast-path for an ACCESS EXCLUSIVE
-	// shape precisely so it can measure the acquisition freeze.
-	if _, err := eng.AssessRun(req.SQL, req.runOptions()...); err != nil {
+	// The pre-check. AssessRun is cheap — a static classification plus, for an
+	// already_safe shape, a single catalog peek at a warm twin — and running it
+	// here rather than only inside the goroutine is what lets a bad statement come
+	// back as a 400 on the very request that submitted it. It must be AssessRun,
+	// not Assess, so this synchronous check honours the run's options — above all
+	// hostile mode, which is allowed past the already_safe fast-path for an ACCESS
+	// EXCLUSIVE shape precisely so it can measure the acquisition freeze — and so a
+	// nonexistent target relation is rejected here instead of blessed SAFE.
+	if _, err := eng.AssessRun(r.Context(), req.SQL, req.runOptions()...); err != nil {
 		s.writeRunError(w, err)
 		return
 	}

@@ -12,8 +12,88 @@ package engine
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 )
+
+// TestAlreadySafeNonexistentTableIsRejected pins the flagship false-SAFE: an
+// already_safe-SHAPED statement (ALTER TABLE ... ADD COLUMN with a constant
+// default) whose target relation does NOT exist must never come back SAFE. The
+// static fast-path classified it catalog-only and short-circuited to already_safe
+// without ever checking the table exists, so a typo'd or absent table was blessed
+// SAFE — the worst verdict this tool can give, because the statement cannot even
+// run. The existence gate must turn it into a clear REJECTED that names the
+// missing object and lists what the lab has, while the SAME shape against the
+// real orders table still returns already_safe SAFE with the honest
+// acquisition_not_simulated qualifier.
+func TestAlreadySafeNonexistentTableIsRejected(t *testing.T) {
+	mgr, eng := newLab(t, "ghost", 1)
+	ctx := context.Background()
+
+	// The check must cost no twin: the whole point of the fast-path is that it
+	// never clones. Capture the pool and database count to prove it.
+	before := mgr.Status()
+	beforeDBs := countDatabases(t, itNamespace)
+
+	// 1. The bug. A nonexistent target must NOT be SAFE.
+	const ghost = "ghost_table_xyz"
+	_, err := eng.Rehearse(ctx, `ALTER TABLE `+ghost+` ADD COLUMN x int`, ModeCustom)
+	var rej *RejectedError
+	if !errors.As(err, &rej) {
+		t.Fatalf("a nonexistent-table ADD COLUMN returned %T (%v), want *RejectedError", err, err)
+	}
+	if rej.Kind == RejectAlreadySafe {
+		t.Fatalf("FALSE-SAFE: ALTER TABLE %s ADD COLUMN was answered already_safe — a statement that "+
+			"cannot even run was blessed SAFE (kind=%s reason=%q)", ghost, rej.Kind, rej.Reason)
+	}
+	if rej.Kind != RejectRejected {
+		t.Errorf("kind = %q, want %q (a clearly not-safe rejection)", rej.Kind, RejectRejected)
+	}
+	// The reason must name the missing object and, ideally, list what the lab has.
+	if !strings.Contains(rej.Reason, ghost) {
+		t.Errorf("reason does not name the missing relation %q: %s", ghost, rej.Reason)
+	}
+	if !strings.Contains(rej.Reason, "orders") {
+		t.Errorf("reason does not list the lab's real table (orders): %s", rej.Reason)
+	}
+	t.Logf("nonexistent-table rejection: code=%s reason=%q suggestion=%q", rej.Code, rej.Reason, rej.Suggestion)
+
+	// A bare ANALYZE of a nonexistent table is the same defect in another shape.
+	_, err = eng.Rehearse(ctx, `ANALYZE `+ghost, ModeCustom)
+	if !errors.As(err, &rej) || rej.Kind == RejectAlreadySafe {
+		t.Errorf("ANALYZE of a nonexistent table was not rejected as not-safe: %v", err)
+	}
+
+	// 2. The control. The SAME shape against the REAL table stays already_safe —
+	// the gate must not turn a genuine catalog-only change into a rehearsal or a
+	// rejection.
+	_, err = eng.Rehearse(ctx, `ALTER TABLE orders ADD COLUMN gate_probe int`, ModeCustom)
+	if !errors.As(err, &rej) {
+		t.Fatalf("ALTER TABLE orders ADD COLUMN returned %T (%v), want an already_safe *RejectedError", err, err)
+	}
+	if rej.Kind != RejectAlreadySafe {
+		t.Errorf("kind = %q for a real-table constant-default ADD COLUMN, want %q", rej.Kind, RejectAlreadySafe)
+	}
+	// The recently-added honesty qualifier must still travel with the SAFE: ADD
+	// COLUMN takes ACCESS EXCLUSIVE, whose acquisition wait a default run does not
+	// simulate.
+	if rej.Qualifier != QualifierAcquisitionNotSimulated {
+		t.Errorf("qualifier = %q on a real-table ADD COLUMN, want %q",
+			rej.Qualifier, QualifierAcquisitionNotSimulated)
+	}
+	if rej.Note == "" {
+		t.Error("an already_safe ACCESS EXCLUSIVE shape must carry the acquisition-wait note")
+	}
+
+	// 3. No twin was consumed for any of it — the gate is a peek, not a clone.
+	after := mgr.Status()
+	if after.CheckedOut != before.CheckedOut || after.Warm != before.Warm {
+		t.Errorf("the existence gate disturbed the pool: %+v -> %+v", before, after)
+	}
+	if got := countDatabases(t, itNamespace); got != beforeDBs {
+		t.Errorf("database count changed from %d to %d — the gate cloned a twin", beforeDBs, got)
+	}
+}
 
 // TestAddColumnUDFDefaultIsRehearsedNotWavedThrough pins the CRITICAL false-SAFE.
 // ALTER TABLE ... ADD COLUMN x DEFAULT some_udf() is NOT a constant default: on
