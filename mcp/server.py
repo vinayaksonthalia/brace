@@ -249,7 +249,12 @@ def check_migration(
     are the worst-of, so gating on effective_verdict blocks the deploy if ANY step
     would. When statements is set, sql is ignored. This is how you verify a
     multi-step safe rewrite (ADD COLUMN; add a NOT VALID constraint; VALIDATE; ...)
-    as the script it actually is.
+    as the script it actually is. A SAFE step that takes ACCESS EXCLUSIVE only
+    because nothing was holding the table still carries acquisition_not_simulated in
+    its per-statement qualifier/note, exactly as a single run would. hostile cannot
+    combine with statements (a sequence can't hold one contended lock across the
+    whole script) — that request is refused; to measure a step's acquisition wait,
+    run that one statement on its own with hostile=true.
     """
     payload: dict = {"mode": "custom"}
     if statements:

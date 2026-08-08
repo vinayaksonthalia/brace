@@ -881,3 +881,29 @@ func TestSequenceAndSchemaConflictIs400(t *testing.T) {
 		t.Fatalf("statements+schema_ddl = %d, want 400", resp.StatusCode)
 	}
 }
+
+// TestSequenceHostileIsRejected: hostile mode measures one statement's wait to
+// ACQUIRE its lock, which a multi-statement sequence cannot hold across the whole
+// script — so asking for both must be refused loudly, not silently ignored.
+func TestSequenceHostileIsRejected(t *testing.T) {
+	l := newLab(t, "seqhostile", 1)
+	body, _ := json.Marshal(map[string]any{
+		"statements": []string{"CREATE INDEX idx_h ON orders (customer_id)"},
+		"hostile":    true,
+	})
+	resp, err := http.Post(l.http.URL+"/api/run", "application/json", strings.NewReader(string(body)))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("statements+hostile = %d, want 400", resp.StatusCode)
+	}
+	var out map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if reason, _ := out["reason"].(string); !strings.Contains(reason, "hostile") && !strings.Contains(reason, "Hostile") {
+		t.Errorf("rejection reason does not explain hostile: %q", out["reason"])
+	}
+}

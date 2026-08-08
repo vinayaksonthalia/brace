@@ -122,6 +122,14 @@ type StatementResult struct {
 	// in seconds since load start, so the UI can shade each statement's window.
 	DDLStartT float64 `json:"ddl_start_t"`
 	DDLEndT   float64 `json:"ddl_end_t"`
+	// Qualifier names what this statement's SAFE did NOT establish, mirroring the
+	// single path. In a sequence the only one that can apply is
+	// acquisition_not_simulated: the statement took ACCESS EXCLUSIVE but, on a twin
+	// nobody was holding, got the lock instantly, so the production wait to ACQUIRE
+	// it was never exercised. Empty for a genuinely unconditional SAFE.
+	Qualifier string `json:"qualifier,omitempty"`
+	// Note is the one-line caveat that travels with Qualifier.
+	Note string `json:"note,omitempty"`
 }
 
 // stmtPlan is a validated statement plus what Assess learned about it. staticSafe
@@ -539,6 +547,7 @@ func (e *Engine) runSequenceOn(ctx context.Context, twin *twins.Twin, plans []st
 	casByLabel := map[string]int64{}
 	durTotal := 0.0
 	var maxBlocked float64
+	var anyAcqQualifier bool
 	modeSet := map[string]struct{}{}
 
 	for i, m := range runsMeasured {
@@ -595,6 +604,23 @@ func (e *Engine) runSequenceOn(ctx context.Context, twin *twins.Twin, plans []st
 		})
 		sr.EffectiveVerdict = effectiveVerdict(verdict, sr.ScaleProjection)
 		sr.ScaleWarning = scaleWarning(verdict, sr.ScaleProjection)
+
+		// Parity with the single path (qualifierFor): a statement that measured SAFE
+		// only because nothing was holding the table — a metadata-only ACCESS
+		// EXCLUSIVE shape that got its lock instantly — must carry the same
+		// acquisition_not_simulated caveat here that AssessRun attaches on the single
+		// path. Without it a sequence would quietly report a bare green light on
+		// exactly the shape Brace is most careful about. Sequences never run
+		// contention (hostile+statements is refused upstream), so this is the only
+		// qualifier they can carry, and it applies only when no freeze was measured
+		// and the projection did not veto the SAFE.
+		if verdict == VerdictSafe && sr.ScaleWarning == "" &&
+			takesAccessExclusive(m.plan.as, m.report) &&
+			blocked == 0 && m.casualty.Total == 0 {
+			sr.Qualifier = QualifierAcquisitionNotSimulated
+			sr.Note = acquisitionNoteSeq(m.plan.as)
+			anyAcqQualifier = true
+		}
 
 		res.Statements = append(res.Statements, sr)
 
@@ -663,6 +689,13 @@ func (e *Engine) runSequenceOn(ctx context.Context, twin *twins.Twin, plans []st
 	if len(runsMeasured) > 0 {
 		res.DDLStartT = runsMeasured[0].startT
 		res.DDLEndT = runsMeasured[len(runsMeasured)-1].endT
+	}
+	// If the whole sequence is SAFE but at least one step's SAFE hinged on an
+	// unsimulated lock acquisition, surface that at the top level too, so a gate or
+	// agent reading only the overall verdict gets the same caveat the single path
+	// would have given for that statement on its own.
+	if res.Verdict == VerdictSafe && anyAcqQualifier {
+		res.Qualifier = QualifierAcquisitionNotSimulated
 	}
 	res.Explanation = sequenceExplanation(res, len(plans))
 	res.Note = sequenceNote(res, halted, haltedAt, len(plans))
@@ -832,5 +865,24 @@ func sequenceNote(res *RunResult, halted bool, haltedAt, total int) string {
 			"and were killed; with a different deadline the freezes are the same and this count is not.",
 			res.Casualties.Total, res.Casualties.DeadlineMS)
 	}
+	if res.Qualifier == QualifierAcquisitionNotSimulated {
+		return "One or more steps measured SAFE only because nothing was holding the table: they take ACCESS EXCLUSIVE and got " +
+			"their lock instantly. In production each waits behind your longest open transaction, and because PostgreSQL grants " +
+			"locks in arrival order, every query that arrives after it waits too — the table stops until that transaction ends. " +
+			"This run did not simulate that wait; see the per-statement notes for which steps, and re-run any one of them on its " +
+			"own with hostile:true to measure it."
+	}
 	return ""
+}
+
+// acquisitionNoteSeq is the per-statement caveat for a sequence step that measured
+// SAFE but takes ACCESS EXCLUSIVE — the sequence-mode sibling of the single path's
+// acquisition note. It differs only in the remediation pointer: a sequence cannot
+// run contention (hostile+statements is refused), so it points the operator at
+// re-running that one statement on its own with hostile:true.
+func acquisitionNoteSeq(as *Assessment) string {
+	return fmt.Sprintf("This step measured SAFE, but it takes ACCESS EXCLUSIVE — the lock a bare %s takes — and got it instantly "+
+		"only because nothing was holding the table. In production it waits behind your longest open transaction, and every query "+
+		"that arrives after it waits too, until that transaction ends. This run did not simulate that wait. To measure it, run this "+
+		"one statement on its own with hostile:true.", strings.TrimSpace(as.Lesson.Title))
 }

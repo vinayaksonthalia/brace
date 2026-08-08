@@ -95,6 +95,52 @@ func TestSequenceDependentStatements(t *testing.T) {
 	}
 }
 
+// TestSequenceCarriesAcquisitionQualifier proves the honesty-parity fix: a
+// metadata-only ACCESS EXCLUSIVE statement (ADD COLUMN … DEFAULT <const>) measures
+// SAFE on an idle twin because it gets its lock instantly — but the single path
+// attaches acquisition_not_simulated to exactly this shape, and a sequence must do
+// the same rather than emit a bare green light. The per-statement result, and the
+// SAFE top-level roll-up, both carry the qualifier and a note.
+func TestSequenceCarriesAcquisitionQualifier(t *testing.T) {
+	_, eng := newLab(t, "seqacq", 1)
+	ctx := context.Background()
+
+	res, err := eng.RehearseSequence(ctx, []string{
+		"ALTER TABLE orders ADD COLUMN flag boolean NOT NULL DEFAULT false",
+	}, ModeCustom)
+	if err != nil {
+		t.Fatalf("RehearseSequence: %v", err)
+	}
+	if len(res.Statements) != 1 {
+		t.Fatalf("got %d per-statement results, want 1", len(res.Statements))
+	}
+	s := res.Statements[0]
+	t.Logf("stmt verdict=%s class=%s qualifier=%q blocked=%.3f cas=%d",
+		s.Verdict, s.Classification, s.Qualifier, s.BlockedSeconds, s.Casualties.Total)
+
+	if s.Verdict != VerdictSafe {
+		t.Fatalf("catalog-only ADD COLUMN measured %s, want SAFE — cannot assert the acquisition qualifier otherwise", s.Verdict)
+	}
+	if s.Classification != ClassAddColumnConstDefault {
+		t.Errorf("classified %q, want add_column_const_default", s.Classification)
+	}
+	if s.Qualifier != QualifierAcquisitionNotSimulated {
+		t.Errorf("per-statement qualifier = %q, want %q — a sequence bare-SAFE'd an ACCESS EXCLUSIVE shape the single path is careful about",
+			s.Qualifier, QualifierAcquisitionNotSimulated)
+	}
+	if s.Note == "" {
+		t.Error("per-statement acquisition qualifier carries no note")
+	}
+	// And the SAFE top-level roll-up surfaces it, so a gate reading only the overall
+	// verdict gets the same caveat.
+	if res.Verdict == VerdictSafe && res.Qualifier != QualifierAcquisitionNotSimulated {
+		t.Errorf("overall SAFE sequence dropped the acquisition qualifier: %q", res.Qualifier)
+	}
+	if res.Verdict == VerdictSafe && res.Note == "" {
+		t.Error("overall SAFE sequence with an acquisition qualifier carries no note")
+	}
+}
+
 // TestSequenceRejectsNonAllowlistedMidway proves the security guard is NOT relaxed
 // by the sequence path: a DROP TABLE hidden between two legitimate statements is
 // refused as a *RejectedError, and — because the refusal happens before Acquire —

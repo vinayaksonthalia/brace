@@ -766,6 +766,16 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	if seqMode && req.Hostile != nil && *req.Hostile {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"error": "rejected",
+			"kind":  string(engine.RejectRejected),
+			"reason": "Hostile mode measures one statement's wait to ACQUIRE its lock; a sequence runs many statements on one twin, " +
+				"so it cannot hold a single contended lock across the whole script. Rehearse the sequence normally to measure each " +
+				"step's freeze, then re-run the one statement you care about on its own with hostile:true.",
+		})
+		return
+	}
 	switch {
 	case seqMode:
 		if _, err := eng.AssessSequence(r.Context(), req.Statements, req.runOptions()...); err != nil {
