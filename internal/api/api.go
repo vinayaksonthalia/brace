@@ -629,6 +629,15 @@ func (s *Server) reportByID(ctx context.Context, id int64) (*engine.RunRecord, e
 type runRequest struct {
 	SQL  string `json:"sql"`
 	Mode string `json:"mode"`
+	// SchemaDDL, when non-empty, switches this run to bring-your-own-schema mode:
+	// Brace builds a disposable database from this single CREATE TABLE, seeds it,
+	// and rehearses SQL against it instead of the stock orders table. Empty leaves
+	// the default orders flow completely untouched.
+	SchemaDDL string `json:"schema_ddl,omitempty"`
+	// RowCount is the caller's approximate real table size for a schema run. It
+	// drives the scale projection ("at your real size") and, clamped, how many
+	// synthetic rows are actually seeded. Ignored when SchemaDDL is empty.
+	RowCount int64 `json:"row_count,omitempty"`
 	// TargetRows lets a caller ask "what about MY table?": the run is measured
 	// on the twin as always, and the result additionally carries a projection
 	// onto this many rows. Absent, zero, negative or absurd (> 1e12) values are
@@ -733,7 +742,17 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	// hostile mode, which is allowed past the already_safe fast-path for an ACCESS
 	// EXCLUSIVE shape precisely so it can measure the acquisition freeze — and so a
 	// nonexistent target relation is rejected here instead of blessed SAFE.
-	if _, err := eng.AssessRun(r.Context(), req.SQL, req.runOptions()...); err != nil {
+	//
+	// A schema run pre-checks the pasted CREATE TABLE plus the migration; there is
+	// no warm-twin peek, because the target table lives in the disposable database
+	// the run is about to build.
+	schemaMode := strings.TrimSpace(req.SchemaDDL) != ""
+	if schemaMode {
+		if _, err := eng.AssessSchemaRun(r.Context(), req.SchemaDDL, req.SQL, req.runOptions()...); err != nil {
+			s.writeRunError(w, err)
+			return
+		}
+	} else if _, err := eng.AssessRun(r.Context(), req.SQL, req.runOptions()...); err != nil {
 		s.writeRunError(w, err)
 		return
 	}
@@ -746,7 +765,10 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusConflict, map[string]any{"error": "run_in_progress"})
 		return
 	}
-	if st.Pool.Warm == 0 {
+	// A schema run builds its OWN disposable database and does not draw from the
+	// warm pool, so it can proceed even when the pool is momentarily cold. Only the
+	// stock orders flow needs a warm twin here.
+	if !schemaMode && st.Pool.Warm == 0 {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
 			"error":       "no_warm_twin",
 			"eta_seconds": s.cfg.CloneETASeconds,
@@ -764,8 +786,21 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	resCh := make(chan outcome, 1)
 	sql := req.SQL
 	opts := req.runOptions()
+	schemaDDL := req.SchemaDDL
+	rowCount := req.RowCount
 	go func() {
-		res, err := eng.Rehearse(s.runCtx, sql, mode, opts...)
+		var res *engine.RunResult
+		var err error
+		if schemaMode {
+			res, err = eng.RehearseSchema(s.runCtx, engine.SchemaRequest{
+				SchemaDDL: schemaDDL,
+				RowCount:  rowCount,
+				SQL:       sql,
+				Mode:      mode,
+			}, opts...)
+		} else {
+			res, err = eng.Rehearse(s.runCtx, sql, mode, opts...)
+		}
 		resCh <- outcome{res: res, err: err}
 	}()
 

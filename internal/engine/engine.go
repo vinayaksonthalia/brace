@@ -196,6 +196,14 @@ type Config struct {
 	// CloneETA is how long a twin clone takes on this deployment; it is only
 	// used to give a 503 an honest-ish "come back in N seconds". Defaults to 45s.
 	CloneETA time.Duration
+	// ScratchPrefix is the database-name namespace for bring-your-own-schema runs
+	// — the disposable, per-request databases RehearseSchema creates from a user's
+	// pasted CREATE TABLE, seeds, measures, and drops. It is deliberately DISTINCT
+	// from the twin pool's namespace (brace_run_) and from brace_template so a
+	// scratch database can never be confused with, or swept alongside, a warm twin
+	// or the real template. Defaults to brace_byos_. Every scratch database is
+	// dropped at the end of its run; any left by a crash are swept at startup.
+	ScratchPrefix string
 	// TwinRows is how many rows the seeded template — and therefore every twin —
 	// actually holds. It is not used to run anything; it is the denominator of
 	// the scale projection, which is the only thing standing between a
@@ -245,6 +253,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.CloneETA <= 0 {
 		c.CloneETA = defaultCloneETA
+	}
+	if c.ScratchPrefix == "" {
+		c.ScratchPrefix = DefaultScratchPrefix
 	}
 	if c.MaxRunDuration <= 0 {
 		c.MaxRunDuration = defaultMaxRunDuration
@@ -391,12 +402,18 @@ type Status struct {
 // run phases, in order.
 const (
 	phaseAcquiring = "acquiring_twin"
-	phaseGranting  = "granting"
-	phaseWarming   = "starting_load"
-	phaseBaseline  = "measuring_baseline"
-	phaseMigrating = "running_migration"
-	phaseRecovery  = "observing_recovery"
-	phaseReporting = "reporting"
+	// phaseProvisioning and phaseSeeding are the two extra phases a
+	// bring-your-own-schema run passes through before it joins the normal
+	// pipeline at phaseGranting: creating the disposable database + the user's
+	// table, then seeding it with synthetic rows.
+	phaseProvisioning = "provisioning_schema"
+	phaseSeeding      = "seeding_schema"
+	phaseGranting     = "granting"
+	phaseWarming      = "starting_load"
+	phaseBaseline     = "measuring_baseline"
+	phaseMigrating    = "running_migration"
+	phaseRecovery     = "observing_recovery"
+	phaseReporting    = "reporting"
 )
 
 // Engine orchestrates rehearsals. Safe for concurrent use; at most one
@@ -485,6 +502,21 @@ func New(ctx context.Context, cfg Config) (*Engine, error) {
 	if err := e.ledger.CreateSchema(ctx); err != nil {
 		pool.Close()
 		return nil, err
+	}
+	// The scratch namespace must be specific enough that a sweep of it cannot
+	// touch anything else on the server — it is DROP DATABASE with a prefix.
+	if !safeIdent.MatchString(cfg.ScratchPrefix) || len(cfg.ScratchPrefix) < 6 {
+		pool.Close()
+		return nil, fmt.Errorf("engine: ScratchPrefix %q must match %s and be at least 6 bytes", cfg.ScratchPrefix, safeIdent)
+	}
+	// Reclaim any scratch database a previous crash left behind. Best-effort: a
+	// bring-your-own-schema run is additive, and a sweep that cannot complete must
+	// not stop the lab from serving the stock orders flow. Brace is single-tenant
+	// per server (the twin pool and the rotated roles already assume that), so a
+	// fresh process owns the whole namespace and anything matching the prefix is
+	// debris.
+	if err := e.sweepScratchOrphans(ctx); err != nil {
+		e.log.Warn("engine.scratch_sweep_failed", "prefix", cfg.ScratchPrefix, "err", err)
 	}
 	labelSource := "default"
 	if len(cfg.Labels) > 0 {
@@ -768,6 +800,16 @@ type runOptions struct {
 	// LockTimeout is the simulated request deadline for this run's traffic — the
 	// definition of a casualty. Zero means the deployment's default.
 	LockTimeout time.Duration
+	// Labels overrides the traffic mix for THIS run. It is how a
+	// bring-your-own-schema run drives generic INSERT traffic at the user's own
+	// table instead of the stock orders mix. Nil means the deployment's default
+	// (Config.Labels), so the stock orders flow is untouched.
+	Labels []loadgen.LabelSpec
+	// TwinRows overrides the scale projection's denominator for THIS run — the
+	// number of rows the disposable database actually holds. A schema run seeds a
+	// bounded sample and sets this to the seeded count; the stock flow leaves it 0
+	// and Config.TwinRows (the template's size) stands.
+	TwinRows int64
 }
 
 // WithTargetRows answers "what about MY table?" for one run. Non-positive or
@@ -823,6 +865,21 @@ func WithLockTimeout(d time.Duration) RunOption {
 // runOn is the measured part of a run: everything after the twin exists and
 // before it is destroyed.
 func (e *Engine) runOn(ctx context.Context, twin *twins.Twin, as *Assessment, mode Mode, state *RunState, ro runOptions) (*RunResult, error) {
+	// The traffic mix and the projection denominator are per-run: a
+	// bring-your-own-schema run supplies both (generic INSERTs at the user's table,
+	// and the seeded row count), while the stock orders flow leaves them unset and
+	// the deployment's Config values stand. Everything else below is identical for
+	// both paths — the whole point is that a schema run is measured exactly like a
+	// twin run.
+	labels := e.cfg.Labels
+	if len(ro.Labels) > 0 {
+		labels = ro.Labels
+	}
+	twinRows := e.cfg.TwinRows
+	if ro.TwinRows > 0 {
+		twinRows = ro.TwinRows
+	}
+
 	res := &RunResult{
 		RunID:          state.RunID,
 		StartedAt:      state.StartedAt,
@@ -886,7 +943,7 @@ func (e *Engine) runOn(ctx context.Context, twin *twins.Twin, as *Assessment, mo
 		DSN:         trafDSN,
 		Workers:     e.cfg.Workers,
 		LockTimeout: lockTimeout,
-		Labels:      e.cfg.Labels,
+		Labels:      labels,
 		Logger:      e.cfg.Logger,
 	})
 	if err != nil {
@@ -1011,7 +1068,7 @@ func (e *Engine) runOn(ctx context.Context, twin *twins.Twin, as *Assessment, mo
 		res.Contention.HoldSeconds = hold.Seconds()
 		con := loadgen.NewContender(loadgen.ContendConfig{
 			DSN:       trafDSN,
-			Statement: loadgen.ContentionStatement(e.cfg.Labels),
+			Statement: loadgen.ContentionStatement(labels),
 			Hold:      hold,
 			Logger:    e.cfg.Logger,
 		})
@@ -1178,7 +1235,7 @@ func (e *Engine) runOn(ctx context.Context, twin *twins.Twin, as *Assessment, mo
 	// lock is merely held longer on a bigger table without freezing anybody.
 	res.ScaleProjection = scaleProjectionFor(res.Verdict, scaleInputs{
 		Measured:              res.BlockedSeconds,
-		TwinRows:              e.cfg.TwinRows,
+		TwinRows:              twinRows,
 		TargetRows:            ro.TargetRows,
 		ScalesWithRows:        as.Lesson.ScalesWithRows,
 		BlocksWrites:          as.Lesson.BlocksWrites,

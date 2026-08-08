@@ -172,6 +172,28 @@ document.documentElement.setAttribute('data-theme',t);})();</script>
       </span>
     </label>
 
+    <!-- Bring your own schema (optional, additive). The default flow runs
+         against the demo's orders table; this lets a visitor rehearse the SAME
+         migration against THEIR OWN table shape instead. Brace builds a
+         disposable, isolated database from this one CREATE TABLE, seeds it with
+         synthetic rows (never real data), runs the migration above against it,
+         and drops everything afterwards. -->
+    <details class="byos" id="byosPanel">
+      <summary class="byos__summary">rehearse your own schema <span>(synthetic data — optional)</span></summary>
+      <div class="byos__body">
+        <label class="sr" for="schemaDdl">Your CREATE TABLE</label>
+        <textarea id="schemaDdl" class="byos__ddl" spellcheck="false" autocomplete="off"
+          autocorrect="off" autocapitalize="off" rows="6"
+          placeholder="-- one CREATE TABLE; Brace seeds it with synthetic rows&#10;CREATE TABLE my_table (&#10;  id bigserial PRIMARY KEY,&#10;  customer_id bigint NOT NULL,&#10;  amount_cents bigint NOT NULL,&#10;  created_at timestamptz NOT NULL DEFAULT now()&#10;);"></textarea>
+        <label class="byos__rows" for="rowCount">
+          <span>approximate rows in your real table</span>
+          <input type="number" id="rowCount" min="0" step="1000" placeholder="1000000" inputmode="numeric">
+        </label>
+        <p class="byos__hint">One CREATE TABLE only. Brace seeds a bounded sample (up to a few million rows) and
+          projects the result onto the size you give. Your migration above runs against this table instead of orders.</p>
+      </div>
+    </details>
+
     <div class="console__foot">
       <button type="button" class="run" id="runBtn">
         <span class="run__text">Run the crash test</span>

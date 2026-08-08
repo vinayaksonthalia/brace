@@ -335,6 +335,34 @@ main{
 #sql::placeholder{ color:var(--ink-3); }
 #sql:disabled{ opacity:.55; }
 
+/* Bring-your-own-schema: an optional, collapsed affordance that stays out of the
+   way of the default orders flow until a visitor opens it. */
+.byos{ margin:var(--s3) var(--gut) 0; border:1px solid var(--edge); border-radius:var(--r-sm); background:var(--panel); }
+.byos__summary{
+  cursor:pointer; list-style:none; padding:var(--s2) var(--s3);
+  font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-2);
+}
+.byos__summary::-webkit-details-marker{ display:none; }
+.byos__summary::before{ content:"+ "; color:var(--ink-3); }
+.byos[open] .byos__summary::before{ content:"– "; }
+.byos__summary span{ text-transform:none; letter-spacing:0; color:var(--ink-3); font-size:10px; }
+.byos__body{ padding:0 var(--s3) var(--s3); display:flex; flex-direction:column; gap:var(--s2); }
+.byos__ddl{
+  width:100%; box-sizing:border-box; resize:vertical;
+  background:var(--well); color:var(--ink);
+  border:1px solid var(--edge); border-radius:var(--r-sm); padding:var(--s3);
+  font-family:var(--mono); font-size:12px; line-height:1.6; tab-size:2; caret-color:var(--amber);
+}
+.byos__ddl:hover:not(:disabled){ border-color:var(--edge-hot); }
+.byos__ddl::placeholder{ color:var(--ink-3); }
+.byos__rows{ display:flex; align-items:center; gap:var(--s2); font-size:11px; color:var(--ink-2); }
+.byos__rows input{
+  width:9rem; background:var(--well); color:var(--ink);
+  border:1px solid var(--edge); border-radius:var(--r-sm); padding:var(--s1) var(--s2);
+  font-family:var(--mono); font-size:12px;
+}
+.byos__hint{ margin:0; font-size:10px; line-height:1.5; color:var(--ink-3); }
+
 .console__foot{ padding:var(--s3) var(--gut) var(--gut); display:flex; align-items:center; gap:var(--s3); }
 .run{
   flex:1; cursor:pointer; font-family:inherit;

@@ -148,6 +148,7 @@ def _pending(run_id: str, waited: int) -> dict:
 @mcp.tool
 def check_migration(
     sql: str, target_rows: int = 0, hostile: bool = False,
+    schema_ddl: str = "", row_count: int = 0,
     wait_seconds: int = _DEFAULT_WAIT_SECONDS,
 ) -> dict:
     """Crash-test a Postgres migration on a production-scale twin under live
@@ -207,12 +208,23 @@ def check_migration(
 
     A slow migration therefore never disappears: on PENDING, poll get_result with
     the returned run_id.
+
+    schema_ddl: rehearse against YOUR OWN table instead of the demo's. Pass a
+    single CREATE TABLE statement and Brace builds a disposable, isolated database
+    from it, seeds a bounded sample of synthetic rows (type-aware), runs sql
+    against THAT shape, and drops everything afterwards. row_count is your
+    approximate real table size: it drives the scale projection and (clamped) how
+    many rows are seeded. Leave schema_ddl empty to use the stock orders table.
     """
     payload = {"sql": sql, "mode": "custom"}
     if target_rows > 0:
         payload["target_rows"] = target_rows
     if hostile:
         payload["hostile"] = True
+    if schema_ddl.strip():
+        payload["schema_ddl"] = schema_ddl
+        if row_count > 0:
+            payload["row_count"] = row_count
 
     try:
         r = requests.post(f"{API}/api/run", json=payload, timeout=30)

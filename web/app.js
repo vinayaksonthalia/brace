@@ -55,6 +55,10 @@ const API = window.BRACE_API_BASE || (/^web-[^.]+\./.test(location.host)
       var body = { sql: sql };
       if (opts.hostile) body.hostile = true;
       if (opts.target_rows != null) body.target_rows = opts.target_rows;
+      // Bring-your-own-schema: additive. When a CREATE TABLE is supplied the run
+      // rehearses against that shape instead of the demo's orders table.
+      if (opts.schema_ddl) body.schema_ddl = opts.schema_ddl;
+      if (opts.row_count != null) body.row_count = opts.row_count;
       return fetch(API + '/api/run', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -475,6 +479,8 @@ const API = window.BRACE_API_BASE || (/^web-[^.]+\./.test(location.host)
     sql: $('#sql'),
     runBtn: $('#runBtn'),
     hostile: $('#hostileToggle'),
+    schemaDdl: $('#schemaDdl'),
+    rowCount: $('#rowCount'),
     cmdChip: $('#cmdChip'),
     runText: $('.run__text'),
     runHint: $('#runHint'),
@@ -1323,6 +1329,10 @@ const API = window.BRACE_API_BASE || (/^web-[^.]+\./.test(location.host)
       var origin = API || location.origin;
       var body = { sql: el.sql.value };
       if (el.hostile && el.hostile.checked) body.hostile = true;
+      if (el.schemaDdl && el.schemaDdl.value.trim()) {
+        body.schema_ddl = el.schemaDdl.value;
+        if (el.rowCount && parseInt(el.rowCount.value, 10) > 0) body.row_count = parseInt(el.rowCount.value, 10);
+      }
       return "curl -sX POST " + origin + "/api/run \\\n" +
         "  -H 'content-type: application/json' \\\n" +
         "  -d " + JSON.stringify(JSON.stringify(body)).replace(/'/g, "'\\''");
@@ -1379,6 +1389,14 @@ const API = window.BRACE_API_BASE || (/^web-[^.]+\./.test(location.host)
     if (state === 'running' || state === 'crash') return;
     var sql = el.sql.value;
     var hostile = !!(el.hostile && el.hostile.checked);
+    // Bring-your-own-schema, if the visitor filled it in. Absent, the run is the
+    // ordinary orders flow, unchanged.
+    var schemaDdl = (el.schemaDdl && el.schemaDdl.value.trim()) || '';
+    var rowCount = 0;
+    if (el.rowCount && el.rowCount.value.trim()) {
+      var rc = parseInt(el.rowCount.value, 10);
+      if (!isNaN(rc) && rc > 0) rowCount = rc;
+    }
     clearNotice();
     dispatchedRunId = null;
     el.reportNote.textContent = 'dispatching';
@@ -1390,7 +1408,12 @@ const API = window.BRACE_API_BASE || (/^web-[^.]+\./.test(location.host)
     setReportScope('live');
     swapReport(function () { return dispatchingCard(sql); });
 
-    api.run(sql, { hostile: hostile }).then(function (res) {
+    var runOpts = { hostile: hostile };
+    if (schemaDdl) {
+      runOpts.schema_ddl = schemaDdl;
+      if (rowCount > 0) runOpts.row_count = rowCount;
+    }
+    api.run(sql, runOpts).then(function (res) {
       // run_started arrives on the stream; this only confirms acceptance.
       dispatchedRunId = res.run_id || null;
       activeRunId = res.run_id || activeRunId;

@@ -236,6 +236,9 @@ func newLab(t *testing.T, prefix string, poolSize int) (*twins.Manager, *Engine)
 		AdminURL: appURL,
 		Twins:    mgr,
 		Workers:  12,
+		// Keep bring-your-own-schema scratch databases inside the test namespace so
+		// the single TestMain sweep reclaims any a failed test leaves behind.
+		ScratchPrefix: itNamespace + "byos_",
 		// The twin's real size, which is the denominator of every scale
 		// projection. Without it the engine correctly refuses to project.
 		TwinRows: templateRows,
