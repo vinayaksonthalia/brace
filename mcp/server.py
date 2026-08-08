@@ -137,6 +137,21 @@ if __name__ == "__main__":
     # hosted service, MCP_TRANSPORT=http serves streamable HTTP at /mcp/ so an
     # agent can connect by URL with nothing installed.
     if os.environ.get("MCP_TRANSPORT", "stdio").lower() == "http":
-        mcp.run(transport="http", host="0.0.0.0", port=int(os.environ.get("PORT", "8080")))
+        import uvicorn
+
+        app = mcp.http_app(path="/mcp")
+
+        # Serve /mcp AND /mcp/ identically. Starlette would 307-redirect the
+        # trailing-slash form, and through the Zerops proxy that redirect
+        # downgrades the POST to a GET (→ 400), so an agent that adds a slash
+        # would fail confusingly. Normalising the path in front of the app
+        # removes the redirect entirely — both forms just work. lifespan and
+        # every other scope pass straight through untouched.
+        async def normalize_slash(scope, receive, send):
+            if scope.get("type") == "http" and scope.get("path") == "/mcp/":
+                scope = dict(scope, path="/mcp", raw_path=b"/mcp")
+            await app(scope, receive, send)
+
+        uvicorn.run(normalize_slash, host="0.0.0.0", port=int(os.environ.get("PORT", "8080")))
     else:
         mcp.run()
