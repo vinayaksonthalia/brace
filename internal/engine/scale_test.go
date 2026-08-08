@@ -161,6 +161,28 @@ func TestProjectScale(t *testing.T) {
 				ScalesWithRows: true, BlocksWrites: true, Verdict: VerdictInconclusive,
 			},
 		},
+		{
+			// A catch-all ALTER TABLE (scaling merely UNCERTAIN) that measured
+			// nothing above the floor must NOT be projected: manufacturing a freeze
+			// from the 250ms floor here is a false-UNSAFE on a statement that did no
+			// measurable work — the DROP COLUMN family lived on this bug.
+			name: "uncertain-scaling shape at the floor is not projected",
+			in: scaleInputs{
+				Measured: 0.1, TwinRows: tenM, TargetRows: fiveHundredM,
+				ScalesWithRows: true, BlocksWrites: true, ScaleUncertain: true, Verdict: VerdictSafe,
+			},
+		},
+		{
+			// ...but if that same uncertain shape actually MEASURED a freeze above
+			// the floor, it rewrote — and a real measurement outranks the
+			// uncertainty, so it is projected.
+			name: "uncertain-scaling shape with a real measured freeze is projected",
+			in: scaleInputs{
+				Measured: 0.6, TwinRows: tenM, TargetRows: fiveHundredM,
+				ScalesWithRows: true, BlocksWrites: true, ScaleUncertain: true, Verdict: VerdictSafe,
+			},
+			wantVerdict: VerdictUnsafe, wantProjected: 30,
+		},
 	}
 
 	for _, tc := range cases {
@@ -308,11 +330,11 @@ func TestLessonsScaleWithRows(t *testing.T) {
 	scaling := []Classification{
 		ClassCreateIndex, ClassAlterColumnType, ClassAddColumnVolatile,
 		ClassReindex, ClassVacuumFull, ClassAddConstraint, ClassSetNotNull,
-		ClassValidateConstraint,
+		ClassValidateConstraint, ClassAlterIndexRewrite,
 	}
 	flat := []Classification{
 		ClassAddColumnConstDefault, ClassComment, ClassAnalyze,
-		ClassAlterIndex, ClassAddConstraintNotValid,
+		ClassAlterIndex, ClassAddConstraintNotValid, ClassAlterTableConstantTime,
 	}
 	for _, c := range scaling {
 		if !Explain(c).ScalesWithRows {

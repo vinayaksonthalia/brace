@@ -158,7 +158,8 @@ func buildTemplate(ctx context.Context, admin *pgx.Conn) error {
 		id           bigserial primary key,
 		customer_id  bigint not null,
 		amount_cents bigint not null,
-		created_at   timestamptz not null default now()
+		created_at   timestamptz not null default now(),
+		scratch_col  int
 	)`); err != nil {
 		return fmt.Errorf("create orders: %w", err)
 	}
@@ -171,6 +172,17 @@ func buildTemplate(ctx context.Context, admin *pgx.Conn) error {
 	}
 	if _, err := conn.Exec(ctx, `ANALYZE orders`); err != nil {
 		return fmt.Errorf("analyze: %w", err)
+	}
+	// A VOLATILE user-defined function, so an ADD COLUMN ... DEFAULT brace_udf()
+	// exercises the flagship false-SAFE: a denylist of built-in volatile functions
+	// does not recognise this one, so it used to be waved through as a constant
+	// default (already_safe) even though a non-constant default forces a full
+	// ACCESS EXCLUSIVE table rewrite. EXECUTE defaults to PUBLIC, so the migrator
+	// role can call it in the default expression.
+	if _, err := conn.Exec(ctx,
+		`CREATE FUNCTION brace_udf_default() RETURNS double precision
+		 LANGUAGE sql VOLATILE AS $$ SELECT random() $$`); err != nil {
+		return fmt.Errorf("create volatile udf: %w", err)
 	}
 	fmt.Fprintf(os.Stderr, "template seeded: %d rows in %v\n", templateRows, time.Since(start).Round(time.Millisecond))
 	return nil

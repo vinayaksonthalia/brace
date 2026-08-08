@@ -1079,7 +1079,18 @@ func (e *Engine) runOn(ctx context.Context, twin *twins.Twin, as *Assessment, mo
 	if ro.Hostile && holdConfirmed {
 		res.Contention.Enabled = monReport.MigrationLockWaited
 		if !res.Contention.Enabled && res.Contention.Note == "" {
-			res.Contention.Note = "the migration never had to wait for its lock — its lock level does not conflict with the hold, so the acquisition wait was not exercised"
+			// The DDL did not queue behind the hold. There are two very different
+			// reasons, and only one is safe to assert. If its lock level is KNOWN
+			// not to conflict with the writers' ROW EXCLUSIVE hold (a RENAME's SHARE
+			// UPDATE EXCLUSIVE, say), non-conflict is a fact. But a shape that DOES
+			// conflict (ACCESS EXCLUSIVE) yet was never seen waiting means the 250ms
+			// monitor simply missed a short wait or failed to sample — claiming
+			// non-conflict there would be inventing a reason. Only say what we know.
+			if conflictsWithWriteHold(as.Lesson.ExpectedLock) {
+				res.Contention.Note = "the migration was never observed waiting for its lock within the sampling resolution, so the acquisition wait was not measured"
+			} else {
+				res.Contention.Note = "the migration never had to wait for its lock — its lock level does not conflict with the hold, so the acquisition wait was not exercised"
+			}
 		}
 	}
 
@@ -1140,6 +1151,7 @@ func (e *Engine) runOn(ctx context.Context, twin *twins.Twin, as *Assessment, mo
 		TargetRows:     ro.TargetRows,
 		ScalesWithRows: as.Lesson.ScalesWithRows,
 		BlocksWrites:   as.Lesson.BlocksWrites,
+		ScaleUncertain: as.Lesson.ScaleUncertain,
 		Verdict:        res.Verdict,
 		TargetSource:   ro.TargetSource,
 	})
@@ -1232,6 +1244,25 @@ func takesAccessExclusive(as *Assessment, mon monitor.Report) bool {
 		}
 	}
 	return false
+}
+
+// conflictsWithWriteHold reports whether a DDL holding expectedLock would have to
+// queue behind the contender's hold. The contender holds the table with a write
+// statement, i.e. a ROW EXCLUSIVE lock. In PostgreSQL's conflict table ROW
+// EXCLUSIVE conflicts with SHARE, SHARE ROW EXCLUSIVE, EXCLUSIVE and ACCESS
+// EXCLUSIVE; it does NOT conflict with ACCESS SHARE, ROW SHARE, ROW EXCLUSIVE or
+// SHARE UPDATE EXCLUSIVE. An empty/unknown lock is treated as conflicting, so an
+// unrecognised shape that was never seen waiting is reported as "not measured"
+// rather than as "does not conflict" — the safe, non-overclaiming direction.
+func conflictsWithWriteHold(expectedLock string) bool {
+	switch expectedLock {
+	case "ShareLock", "ShareRowExclusiveLock", "ExclusiveLock", "AccessExclusiveLock":
+		return true
+	case "AccessShareLock", "RowShareLock", "RowExclusiveLock", "ShareUpdateExclusiveLock":
+		return false
+	default:
+		return true
+	}
 }
 
 // qualifierFor decides whether this run's SAFE is the whole answer.
@@ -1393,15 +1424,12 @@ func baseNote(res *RunResult, as *Assessment, mon monitor.Report) string {
 	case res.BaselineWPS == 0:
 		return "No baseline traffic was measured, so the freeze window could not be computed from the write rate. " +
 			"Treat the monitor's figures as the only evidence for this run."
-	case res.Verdict == VerdictUnsafe && !as.Lesson.BlocksWrites:
-		return "This statement blocked writes even though its shape usually does not. Worth reading the timeline " +
-			"rather than trusting the pattern."
-	case res.Contention.Requested && !res.Contention.Enabled:
-		// Asked for hostile, did not get it. The numbers are a default run's and
-		// must not be read as anything harsher.
-		return "Hostile mode was requested but did not engage (" + res.Contention.Note + "), so these numbers " +
-			"describe an UNCONTENDED table — read them as a default run, not as a contended one."
 	case res.Contention.Enabled && res.Verdict == VerdictUnsafe:
+		// Placed ABOVE the "blocked though its shape usually does not" branch below:
+		// hostile mode's headline case is precisely an engaged run on a shape that
+		// normally does not block writes (!BlocksWrites), so that branch would
+		// otherwise mask this one and wrongly imply the statement surprised us,
+		// hiding that Brace's own hold created the queue.
 		return fmt.Sprintf("This is a HOSTILE-mode measurement: Brace held a transaction open on the load target for "+
 			"%.1fs at a time, so the migration had to queue for its lock — and every write that arrived after that "+
 			"queued request waited behind it. That pile-up is the %.2fs freeze above. It is a measurement of this "+
@@ -1412,6 +1440,14 @@ func baseNote(res *RunResult, as *Assessment, mon monitor.Report) string {
 		return fmt.Sprintf("Measured with contention: Brace held a transaction open on the load target for %.1fs at a "+
 			"time while the migration ran, and writes still kept flowing. That is the acquisition risk tested rather "+
 			"than assumed away — the strongest green light this rig can give.", res.Contention.HoldSeconds)
+	case res.Verdict == VerdictUnsafe && !as.Lesson.BlocksWrites:
+		return "This statement blocked writes even though its shape usually does not. Worth reading the timeline " +
+			"rather than trusting the pattern."
+	case res.Contention.Requested && !res.Contention.Enabled:
+		// Asked for hostile, did not get it. The numbers are a default run's and
+		// must not be read as anything harsher.
+		return "Hostile mode was requested but did not engage (" + res.Contention.Note + "), so these numbers " +
+			"describe an UNCONTENDED table — read them as a default run, not as a contended one."
 	case res.Qualifier == QualifierAcquisitionNotSimulated && res.ScaleWarning == "":
 		// The false-SAFE this rig used to ship. It wins over the acquisition note
 		// ONLY when there is no scale warning: for a constant-time ACCESS EXCLUSIVE

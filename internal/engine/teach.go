@@ -28,8 +28,10 @@ const (
 	ClassAddConstraintNotValid   Classification = "add_constraint_not_valid"
 	ClassValidateConstraint      Classification = "validate_constraint"
 	ClassSetNotNull              Classification = "set_not_null"
+	ClassAlterTableConstantTime  Classification = "alter_table_constant_time"
 	ClassAlterTableOther         Classification = "alter_table_other"
 	ClassAlterIndex              Classification = "alter_index"
+	ClassAlterIndexRewrite       Classification = "alter_index_rewrite"
 	ClassVacuumFull              Classification = "vacuum_full"
 	ClassVacuum                  Classification = "vacuum"
 	ClassAnalyze                 Classification = "analyze"
@@ -66,6 +68,17 @@ type Lesson struct {
 	// CREATE INDEX CONCURRENTLY) — where the growing cost is wall-clock and I/O
 	// rather than a freeze.
 	ScalesWithRows bool `json:"scales_with_rows"`
+	// ScaleUncertain marks the catch-all shapes (ClassAlterTableOther,
+	// ClassGeneric) where ScalesWithRows is a can't-rule-it-out default rather than
+	// a known fact: some forms under them rewrite the table, some are catalog-only,
+	// and the SQL alone does not say which. For these the scale layer must NOT
+	// manufacture a freeze by projecting the 250ms resolution floor — that would
+	// be a false-UNSAFE on a statement that did no measurable work. It may still
+	// project a freeze the rehearsal actually MEASURED above the floor, because a
+	// real measurement outranks any prediction. The definitely-O(rows) shapes
+	// (CREATE INDEX, SET NOT NULL, ALTER COLUMN TYPE, ...) leave this false, so
+	// their floor measurements still project as an upper bound.
+	ScaleUncertain bool `json:"scale_uncertain,omitempty"`
 	// Explanation is the teach text: which lock, who waits, why the safe form
 	// differs. One short paragraph, technically accurate.
 	Explanation string `json:"explanation"`
@@ -220,24 +233,50 @@ var lessons = map[Classification]Lesson{
 			"as NOT VALID, VALIDATE it without blocking writes, then SET NOT NULL, which becomes a catalog-only change.",
 		Suggestion: "ALTER TABLE t ADD CONSTRAINT c CHECK (col IS NOT NULL) NOT VALID;  -- VALIDATE, then SET NOT NULL",
 	},
+	ClassAlterTableConstantTime: {
+		Title:          "ALTER TABLE (catalog-only)",
+		ExpectedLock:   "AccessExclusiveLock",
+		BlocksWrites:   true,
+		ScalesWithRows: false,
+		Explanation: "This ALTER TABLE form — DROP COLUMN, RENAME, SET/DROP DEFAULT, SET STORAGE and the like — changes " +
+			"catalog metadata only: it never scans or rewrites a row, so it finishes in microseconds regardless of table " +
+			"size. It still takes ACCESS EXCLUSIVE, which conflicts with every other lock mode including plain SELECT, so " +
+			"the real risk is not the work, it is the wait to ACQUIRE that lock behind a long-running query — while the " +
+			"request is queued, every statement that arrives after it queues too. Because the work is not O(rows), a " +
+			"bigger table does not make it slower, and Brace does not project a scale freeze for it.",
+	},
 	ClassAlterTableOther: {
 		Title:          "ALTER TABLE",
 		ExpectedLock:   "AccessExclusiveLock",
 		BlocksWrites:   true,
 		ScalesWithRows: true,
+		ScaleUncertain: true,
 		Explanation: "Most forms of ALTER TABLE take ACCESS EXCLUSIVE, the strongest lock PostgreSQL has: it conflicts " +
 			"with every other mode, so reads and writes both stop. Whether that is a blip or an outage depends entirely " +
 			"on whether the statement also rewrites the table — which is exactly the thing that is hard to predict from " +
 			"the SQL, and exactly what this rehearsal measures.",
 	},
 	ClassAlterIndex: {
-		Title:          "ALTER INDEX",
+		Title:          "ALTER INDEX ... RENAME",
+		ExpectedLock:   "ShareUpdateExclusiveLock",
+		BlocksWrites:   false,
+		ScalesWithRows: false,
+		Explanation: "On PostgreSQL 12+ ALTER INDEX ... RENAME takes only SHARE UPDATE EXCLUSIVE, which does NOT conflict " +
+			"with the ROW EXCLUSIVE lock that INSERT, UPDATE and DELETE take — so writes keep flowing while the rename " +
+			"happens. It is a catalog-only change that finishes in microseconds; the rename does not block traffic and " +
+			"does not grow with the table. (Other ALTER INDEX forms, such as SET TABLESPACE, take ACCESS EXCLUSIVE and " +
+			"are a different story — see below.)",
+	},
+	ClassAlterIndexRewrite: {
+		Title:          "ALTER INDEX (ACCESS EXCLUSIVE forms)",
 		ExpectedLock:   "AccessExclusiveLock",
 		BlocksWrites:   true,
-		ScalesWithRows: false,
-		Explanation: "ALTER INDEX takes ACCESS EXCLUSIVE on the index. Renames and storage-parameter changes are " +
-			"catalog-only and finish in microseconds, so the real risk is the wait to acquire the lock behind in-flight " +
-			"queries — while that request is queued, new statements queue behind it.",
+		ScalesWithRows: true,
+		Explanation: "Unlike a plain RENAME, forms such as ALTER INDEX ... SET TABLESPACE take ACCESS EXCLUSIVE on the " +
+			"index and physically move or rewrite it, so reads and writes against the table wait for the whole operation, " +
+			"and its cost grows with the size of the index. ACCESS EXCLUSIVE conflicts with every other lock mode, so a " +
+			"long-running query in front of it makes the wait worse still. Move indexes during a maintenance window, or " +
+			"rebuild CONCURRENTLY into the new location instead.",
 	},
 	ClassVacuumFull: {
 		Title:          "VACUUM FULL",
@@ -281,6 +320,7 @@ var lessons = map[Classification]Lesson{
 		Title:          "Unrecognised migration",
 		BlocksWrites:   true,
 		ScalesWithRows: true,
+		ScaleUncertain: true,
 		Explanation: "Brace does not recognise this statement's shape, so it has no prediction to offer — which is " +
 			"precisely when a rehearsal is worth the most. The twin will tell you what lock it takes and what it costs " +
 			"live traffic, and the verdict below is measured, not guessed.",
@@ -307,7 +347,8 @@ func Classifications() []Classification {
 		ClassAlterColumnType,
 		ClassAddColumnConstDefault, ClassAddColumnVolatile,
 		ClassAddConstraint, ClassAddConstraintNotValid, ClassValidateConstraint,
-		ClassSetNotNull, ClassAlterTableOther, ClassAlterIndex,
+		ClassSetNotNull, ClassAlterTableConstantTime, ClassAlterTableOther,
+		ClassAlterIndex, ClassAlterIndexRewrite,
 		ClassVacuumFull, ClassVacuum, ClassAnalyze, ClassComment,
 		ClassGeneric,
 	}

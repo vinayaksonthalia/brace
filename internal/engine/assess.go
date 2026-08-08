@@ -35,10 +35,100 @@ const (
 var allowedLeadingVerb = regexp.MustCompile(
 	`^(CREATE INDEX|CREATE UNIQUE INDEX|DROP INDEX|ALTER TABLE|ALTER INDEX|REINDEX|VACUUM|ANALYZE|COMMENT ON)\b`)
 
-// volatileDefault matches the default expressions that force a full table
-// rewrite on ADD COLUMN, because they must produce a different value per row.
-var volatileDefault = regexp.MustCompile(
-	`DEFAULT\s*\(?\s*(NOW\s*\(|CURRENT_TIMESTAMP|CURRENT_DATE|CURRENT_TIME|LOCALTIME|LOCALTIMESTAMP|CLOCK_TIMESTAMP|STATEMENT_TIMESTAMP|TIMEOFDAY|RANDOM\s*\(|GEN_RANDOM_UUID|UUID_GENERATE|NEXTVAL)`)
+// defaultKeyword finds each DEFAULT clause in a flattened ADD COLUMN statement.
+// A statement may add several columns, each with its own default; every one has
+// to be proven constant before the whole thing is metadata-only.
+var defaultKeyword = regexp.MustCompile(`\bDEFAULT\b`)
+
+// constantDefaultValue is the ALLOWLIST of default expressions PostgreSQL 11+
+// stores as a column's "missing value" instead of rewriting every existing row:
+// a bare numeric, string, boolean or NULL literal (optionally signed or wrapped
+// in parentheses, optionally followed by ordinary column-constraint clauses like
+// NOT NULL). It is deliberately an allowlist, not a denylist of known-volatile
+// functions.
+//
+// The reason is the one error this product cannot make. A denylist of built-in
+// volatile functions (now(), random(), nextval(), ...) waves through ANY default
+// it does not recognise — a user-defined function, an unlisted built-in, a
+// stable expression like CURRENT_TIMESTAMP — as "constant", and on PG16 a
+// non-constant default forces a full ACCESS EXCLUSIVE table rewrite. That is a
+// real, minutes-long outage reported SAFE without ever running. Inverting the
+// logic means the failure mode flips to the harmless direction: an expression we
+// cannot PROVE constant is rehearsed (or classified volatile), never waved
+// through. Being wrong toward "rewrite" costs a rehearsal; being wrong toward
+// "constant" ships an outage.
+//
+// Note what is NOT here: CURRENT_TIMESTAMP / now() and friends are STABLE, not
+// constant — PostgreSQL evaluates them per row semantics and does NOT fold them
+// to a stored missing value, so they still rewrite. Only literals qualify.
+var constantDefaultValue = regexp.MustCompile(
+	`^[(\s]*` + // optional leading parentheses / whitespace
+		`(?:` +
+		`NULL` + // the NULL literal
+		`|TRUE|FALSE` + // boolean literals
+		`|[+-]?\s*\d+(?:\.\d+)?(?:E[+-]?\d+)?` + // numeric literal (optional sign / exponent)
+		`|'(?:[^']|'')*'` + // string literal (doubled-quote aware)
+		`)` +
+		`[)\s]*` + // optional trailing parentheses / whitespace
+		// Anything after the literal must be an ordinary column-constraint clause,
+		// never an operator or cast that would continue the expression (0 + fn(),
+		// 'a' || fn(), 0::sometype) — those are not provably constant.
+		`(?:(?:NOT\s+NULL|NULL|CHECK|REFERENCES|UNIQUE|PRIMARY\s+KEY|GENERATED|COLLATE|CONSTRAINT|DEFERRABLE)\b.*)?$`)
+
+// addColumnDefaultsConstant reports whether EVERY DEFAULT clause in an
+// already-flattened ADD COLUMN statement is a provably-constant literal. A
+// statement with no DEFAULT clause is handled by the caller, not here. Any
+// default it cannot prove constant makes the whole statement a candidate rewrite,
+// so the caller stops treating it as catalog-only.
+func addColumnDefaultsConstant(flat string) bool {
+	rest := flat
+	for {
+		loc := defaultKeyword.FindStringIndex(rest)
+		if loc == nil {
+			return true
+		}
+		rest = rest[loc[1]:]
+		expr := columnDefaultExpr(rest)
+		if !constantDefaultValue.MatchString(strings.TrimSpace(expr)) {
+			return false
+		}
+	}
+}
+
+// columnDefaultExpr returns the default expression that begins s: everything up
+// to the first top-level comma (which would start the next column definition),
+// skipping commas inside string literals and parentheses so a function call's
+// argument list does not truncate it. A function-call or operator default is
+// therefore returned whole and fails the constant check, rather than being
+// clipped to a prefix that might spuriously match.
+func columnDefaultExpr(s string) string {
+	depth := 0
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '\'':
+			for i++; i < len(s); i++ {
+				if s[i] == '\'' {
+					if i+1 < len(s) && s[i+1] == '\'' {
+						i++
+						continue
+					}
+					break
+				}
+			}
+		case '(':
+			depth++
+		case ')':
+			if depth > 0 {
+				depth--
+			}
+		case ',':
+			if depth == 0 {
+				return s[:i]
+			}
+		}
+	}
+	return s
+}
 
 // indexBearingColumnOption matches the ADD COLUMN options that quietly build an
 // index or validate a reference, which is what turns a "metadata-only" column
@@ -221,7 +311,14 @@ func classify(flat string) Classification {
 		return ClassComment
 
 	case strings.HasPrefix(flat, "ALTER INDEX"):
-		return ClassAlterIndex
+		// RENAME is the common, benign form: on PG12+ it takes only SHARE UPDATE
+		// EXCLUSIVE and does not conflict with writes. Every other ALTER INDEX form
+		// (SET TABLESPACE moves the index files; others are treated conservatively)
+		// takes ACCESS EXCLUSIVE, so they get the blocking lesson.
+		if strings.Contains(flat, "RENAME") {
+			return ClassAlterIndex
+		}
+		return ClassAlterIndexRewrite
 
 	case strings.HasPrefix(flat, "ALTER TABLE"):
 		return classifyAlterTable(flat)
@@ -248,12 +345,24 @@ func classifyAlterTable(flat string) Classification {
 		if indexBearingColumnOption.MatchString(flat) {
 			return ClassAddConstraint
 		}
-		// A volatile DEFAULT, or a SERIAL/IDENTITY/GENERATED-STORED column, forces
-		// a full table rewrite — the PG11 fast path is only for a CONSTANT default.
-		if volatileDefault.MatchString(flat) || rewritingColumnDef.MatchString(flat) {
+		// SERIAL / BIGSERIAL / SMALLSERIAL and GENERATED ... AS IDENTITY / STORED
+		// carry an implicit per-row computation with no literal DEFAULT keyword.
+		if rewritingColumnDef.MatchString(flat) {
 			return ClassAddColumnVolatile
 		}
-		// Constant default, or no default: metadata-only since PG11.
+		// A DEFAULT is metadata-only ONLY when it is a provably-constant literal;
+		// PG11+ stores that as the column's "missing value". Anything else — a
+		// function call (built-in OR user-defined), a stable expression like
+		// CURRENT_TIMESTAMP, any operator expression — forces a full ACCESS
+		// EXCLUSIVE rewrite, so it is classified volatile and REHEARSED, never
+		// short-circuited to already_safe. addColumnDefaultsConstant is an
+		// allowlist: an unrecognised default is treated as a rewrite, because a
+		// false "constant" here is the flagship false-SAFE this product exists to
+		// prevent.
+		if strings.Contains(flat, "DEFAULT") && !addColumnDefaultsConstant(flat) {
+			return ClassAddColumnVolatile
+		}
+		// A constant default, or no default at all: metadata-only since PG11.
 		return ClassAddColumnConstDefault
 
 	case strings.Contains(flat, "ADD CONSTRAINT"),
@@ -266,7 +375,49 @@ func classifyAlterTable(flat string) Classification {
 		}
 		return ClassAddConstraint
 	}
+	// Catalog-only ALTER TABLE forms: they take ACCESS EXCLUSIVE but do no O(rows)
+	// work, so their cost is constant at any table size. Splitting them out of the
+	// generic ClassAlterTableOther (which is marked O(rows)) is what stops the
+	// scale layer from projecting a phantom multi-second freeze from a 250ms
+	// resolution floor and shipping every clean DROP COLUMN / RENAME / SET DEFAULT
+	// as effective-UNSAFE. Forms that DO rewrite (SET LOGGED / SET UNLOGGED, SET
+	// ACCESS METHOD) are deliberately NOT here — they stay in ClassAlterTableOther
+	// and keep scaling.
+	if isConstantTimeAlterTable(flat) {
+		return ClassAlterTableConstantTime
+	}
 	return ClassAlterTableOther
+}
+
+// isConstantTimeAlterTable recognises the ALTER TABLE sub-forms that are
+// catalog-only: they change metadata under ACCESS EXCLUSIVE without touching or
+// rewriting any row, so their duration does not grow with the table. This is an
+// allowlist — an unrecognised ALTER TABLE stays ClassAlterTableOther, where the
+// rehearsal (and, above the floor, the scale projection) measures it rather than
+// assuming it is free.
+func isConstantTimeAlterTable(flat string) bool {
+	// A rewrite keyword anywhere disqualifies the whole statement, even if it also
+	// contains a catalog-only clause.
+	if strings.Contains(flat, "SET LOGGED") || strings.Contains(flat, "SET UNLOGGED") ||
+		strings.Contains(flat, "SET ACCESS METHOD") || strings.Contains(flat, "SET TABLESPACE") {
+		return false
+	}
+	switch {
+	case strings.Contains(flat, "DROP COLUMN"),
+		strings.Contains(flat, "RENAME"), // RENAME COLUMN / CONSTRAINT / TO
+		strings.Contains(flat, "SET DEFAULT"),
+		strings.Contains(flat, "DROP DEFAULT"),
+		strings.Contains(flat, "DROP NOT NULL"),
+		strings.Contains(flat, "SET STORAGE"),
+		strings.Contains(flat, "SET STATISTICS"),
+		strings.Contains(flat, "SET COMPRESSION"),
+		strings.Contains(flat, "ALTER CONSTRAINT"),
+		strings.Contains(flat, "CLUSTER ON"),
+		strings.Contains(flat, "SET WITHOUT CLUSTER"),
+		strings.Contains(flat, "OWNER TO"):
+		return true
+	}
+	return false
 }
 
 // splitStatements returns the non-blank statements in sql, splitting on

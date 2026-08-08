@@ -130,6 +130,12 @@ type scaleInputs struct {
 	// table twice the size, but it takes twice as long WITHOUT blocking anybody,
 	// so scaling its (zero) freeze would invent an outage.
 	BlocksWrites bool
+	// ScaleUncertain is the teach layer's flag that ScalesWithRows is a
+	// can't-rule-it-out default, not a known fact (the ALTER TABLE / generic
+	// catch-alls). For these we may project a MEASURED freeze above the floor, but
+	// must not manufacture one by projecting the resolution floor itself — that
+	// would be a false-UNSAFE on a statement that did no measurable work.
+	ScaleUncertain bool
 	// Verdict is the measured verdict, used to refuse projecting from a run that
 	// measured nothing.
 	Verdict string
@@ -168,7 +174,26 @@ func projectScale(in scaleInputs) ScaleProjection {
 	if in.TwinRows <= 0 || p.TargetRows <= 0 {
 		return p
 	}
-	if !in.ScalesWithRows || !(in.BlocksWrites || measured > scaleFloorSeconds) {
+	if !in.ScalesWithRows {
+		// Catalog-only work is the same microsecond at any size; scaling it invents
+		// an outage that cannot physically happen.
+		return p
+	}
+	// A projection needs a legitimate base to scale. Two independent sources
+	// qualify:
+	//   - the shape is KNOWN to do O(rows) work under a write-blocking lock, so
+	//     even a floor measurement is a defensible upper bound (CREATE INDEX, SET
+	//     NOT NULL, ALTER COLUMN TYPE); or
+	//   - the rehearsal actually MEASURED a freeze above the resolution floor,
+	//     which outranks any prediction — including on a non-blocking shape that
+	//     surprised us, and on a catch-all whose scaling we could not predict.
+	// A merely-uncertain scaling shape (ClassAlterTableOther / generic) that
+	// measured nothing above the floor gets NO projection: manufacturing a freeze
+	// from the 250ms floor there would be a false-UNSAFE on a statement that did no
+	// measurable work.
+	measuredFreeze := measured > scaleFloorSeconds
+	knownBlockingScale := in.BlocksWrites && !in.ScaleUncertain
+	if !knownBlockingScale && !measuredFreeze {
 		return p
 	}
 	if in.Verdict != VerdictSafe && in.Verdict != VerdictUnsafe {

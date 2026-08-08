@@ -178,8 +178,21 @@ func TestSafeDetector(t *testing.T) {
 		{`ALTER TABLE orders ADD CONSTRAINT fk FOREIGN KEY (customer_id) REFERENCES customers (id) NOT VALID`, ClassAddConstraintNotValid, true, false},
 		{`ALTER TABLE orders VALIDATE CONSTRAINT fk`, ClassValidateConstraint, true, false},
 		{`ALTER TABLE orders ALTER COLUMN customer_id SET NOT NULL`, ClassSetNotNull, false, false},
+		// A user-defined (or any unlisted) function default is NOT provably
+		// constant, so it must NOT fall through to add_column_const_default /
+		// already_safe — it is a rewrite candidate that gets rehearsed. This is the
+		// CRITICAL false-SAFE, pinned at the classification level.
+		{`ALTER TABLE orders ADD COLUMN x double precision NOT NULL DEFAULT my_volatile_fn()`, ClassAddColumnVolatile, false, false},
+		{`ALTER TABLE orders ADD COLUMN x int DEFAULT floor(random()*10)`, ClassAddColumnVolatile, false, false},
+		// Catalog-only ALTER TABLE forms: constant-time, so they must NOT be the
+		// O(rows) generic class that the scale layer projects into a false-UNSAFE.
+		{`ALTER TABLE orders DROP COLUMN status`, ClassAlterTableConstantTime, false, false},
+		{`ALTER TABLE orders ALTER COLUMN status SET DEFAULT 'x'`, ClassAlterTableConstantTime, false, false},
+		{`ALTER TABLE orders RENAME COLUMN status TO state`, ClassAlterTableConstantTime, false, false},
+		// SET LOGGED rewrites the table, so it stays the scaling generic class.
 		{`ALTER TABLE orders SET LOGGED`, ClassAlterTableOther, false, false},
-		{`ALTER INDEX idx RENAME TO idx2`, ClassAlterIndex, false, false},
+		{`ALTER INDEX idx RENAME TO idx2`, ClassAlterIndex, true, false},
+		{`ALTER INDEX idx SET TABLESPACE fast`, ClassAlterIndexRewrite, false, false},
 		{`VACUUM FULL orders`, ClassVacuumFull, false, false},
 		{`VACUUM (ANALYZE) orders`, ClassVacuum, true, false},
 		{`ANALYZE orders`, ClassAnalyze, true, true},
@@ -267,7 +280,8 @@ func TestTeachMapIsComplete(t *testing.T) {
 		}
 		// Every shape we call dangerous should offer a way out, or say why it
 		// cannot. The generic fallback is the only permitted exception.
-		if l.BlocksWrites && l.Suggestion == "" && c != ClassGeneric && c != ClassAlterTableOther && c != ClassAlterIndex {
+		if l.BlocksWrites && l.Suggestion == "" && c != ClassGeneric && c != ClassAlterTableOther &&
+			c != ClassAlterTableConstantTime && c != ClassAlterIndexRewrite {
 			t.Errorf("classification %q blocks writes but suggests no safe rewrite", c)
 		}
 	}

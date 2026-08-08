@@ -103,6 +103,19 @@ func TestHostileAddColumnMeasuresAcquisitionFreeze(t *testing.T) {
 	if !strings.Contains(res.Explanation, "catalog-only change") {
 		t.Errorf("hostile explanation dropped the correct mechanism half of the lesson:\n%s", res.Explanation)
 	}
+
+	// The NOTE must be the hostile disclaimer, not the generic "blocked though its
+	// shape usually does not" line. This shape is !BlocksWrites, so before the
+	// branch reorder the generic branch masked the hostile one — the reader was
+	// told the statement itself surprisingly blocked, hiding that Brace's own hold
+	// created the queue. Assert the hostile note fires so that can't regress.
+	t.Logf("note:\n%s", res.Note)
+	if !strings.Contains(res.Note, "HOSTILE-mode measurement") {
+		t.Errorf("engaged hostile run did not get the hostile note (regression of the branch-order bug):\n%s", res.Note)
+	}
+	if strings.Contains(res.Note, "even though its shape usually does not") {
+		t.Errorf("engaged hostile run got the generic surprise-block note, which hides that Brace caused the queue:\n%s", res.Note)
+	}
 }
 
 // TestHostileRenameDoesNotFalselyGreenLight pins BUG 2: an ALTER INDEX ... RENAME

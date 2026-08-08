@@ -32,7 +32,9 @@ mcp = FastMCP(
 
 
 @mcp.tool
-def check_migration(sql: str, target_rows: int = 0, wait_seconds: int = 240) -> dict:
+def check_migration(
+    sql: str, target_rows: int = 0, hostile: bool = False, wait_seconds: int = 240
+) -> dict:
     """Crash-test a Postgres migration on a production-scale twin under live
     write traffic. Returns effective_verdict (SAFE / UNSAFE / INCONCLUSIVE /
     ERRORED) — the field to gate on — plus the measured write-freeze duration,
@@ -45,18 +47,38 @@ def check_migration(sql: str, target_rows: int = 0, wait_seconds: int = 240) -> 
     number and the projection escalates a SAFE measurement to UNSAFE when it
     would not be safe at your scale. Leave it 0 to skip projection.
 
+    hostile: run the migration against a deliberately contended table — while it
+    runs, the lab holds a transaction open on the target so the migration has to
+    QUEUE for its lock. Use this to measure the acquisition-wait risk of a shape
+    that a default run reports SAFE with qualifier "acquisition_not_simulated"
+    (DROP INDEX, DROP COLUMN, and other fast ACCESS EXCLUSIVE changes get that
+    lock instantly on an idle twin, so a plain run never tests the wait that
+    actually causes their production outages).
+
     ALWAYS gate on effective_verdict, never on verdict: verdict is only what was
     measured on the twin, while effective_verdict also accounts for the
     projection onto target_rows. A migration can be SAFE here and UNSAFE for you.
+
+    Read the qualifier and note too: a SAFE with qualifier
+    "acquisition_not_simulated" or "contention_not_engaged" is only half the
+    answer — re-run with hostile=true to measure the rest. contention reports
+    whether hostile mode actually engaged.
     """
     payload = {"sql": sql, "mode": "custom"}
     if target_rows > 0:
         payload["target_rows"] = target_rows
+    if hostile:
+        payload["hostile"] = True
     r = requests.post(f"{API}/api/run", json=payload, timeout=30)
     body = r.json()
     if r.status_code == 400:
         if body.get("kind") == "already_safe":
-            return {"verdict": "SAFE", "statically_safe": True, "reason": body.get("reason")}
+            return {
+                "effective_verdict": "SAFE",
+                "verdict": "SAFE",
+                "statically_safe": True,
+                "reason": body.get("reason"),
+            }
         return {"verdict": "REJECTED", "reason": body.get("reason"), "suggestion": body.get("suggestion")}
     if r.status_code == 409:
         return {"verdict": "BUSY", "reason": "another crash test is running; retry shortly"}
@@ -82,6 +104,12 @@ def check_migration(sql: str, target_rows: int = 0, wait_seconds: int = 240) -> 
                     "casualties", "errored_total", "baseline_writes_per_sec",
                     "lock_modes", "explanation", "suggestion", "error",
                     "invalid_indexes",
+                    # The honesty layer: what this run did NOT establish (qualifier),
+                    # the one-line caveat (note), and whether hostile contention
+                    # actually engaged (contention). Without these an agent reads an
+                    # unqualified SAFE for a shape whose acquisition wait was never
+                    # simulated.
+                    "qualifier", "note", "contention",
                 )
             }
     return {"verdict": "TIMEOUT", "reason": f"crash test still running after {wait_seconds}s"}
