@@ -683,6 +683,20 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	var req runRequest
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes))
 	if err := dec.Decode(&req); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			// The body was valid JSON syntax as far as we could tell — it was
+			// simply larger than the cap. Saying "not valid JSON" here sends the
+			// caller hunting for a syntax error that is not there; name the real
+			// problem, with the 413 that fits it.
+			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{
+				"error": "rejected",
+				"kind":  string(engine.RejectRejected),
+				"reason": fmt.Sprintf("The request body is too large (limit %d KB). Brace rehearses one migration "+
+					"statement at a time — send just the statement.", maxBodyBytes>>10),
+			})
+			return
+		}
 		writeJSON(w, http.StatusBadRequest, map[string]any{
 			"error":  "rejected",
 			"kind":   string(engine.RejectRejected),
@@ -711,10 +725,13 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The pre-check. Assess is pure and cheap, and running it here rather than
+	// The pre-check. AssessRun is pure and cheap, and running it here rather than
 	// only inside the goroutine is what lets a bad statement come back as a 400
-	// on the very request that submitted it.
-	if _, err := engine.Assess(req.SQL); err != nil {
+	// on the very request that submitted it. It must be AssessRun, not Assess, so
+	// this synchronous check honours the run's options — above all hostile mode,
+	// which is allowed past the already_safe fast-path for an ACCESS EXCLUSIVE
+	// shape precisely so it can measure the acquisition freeze.
+	if _, err := eng.AssessRun(req.SQL, req.runOptions()...); err != nil {
 		s.writeRunError(w, err)
 		return
 	}

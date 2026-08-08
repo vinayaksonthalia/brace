@@ -166,6 +166,40 @@ func TestRunIsRateLimited(t *testing.T) {
 	}
 }
 
+// TestOversizedBodyIsTooLargeNotBadJSON pins BUG 3: a well-formed JSON body that
+// merely exceeds the size cap must be reported as too large (413), not as
+// invalid JSON — the latter sends the caller hunting for a syntax error that is
+// not there.
+func TestOversizedBodyIsTooLargeNotBadJSON(t *testing.T) {
+	s := New(Config{Logger: quiet(), TickInterval: time.Hour})
+	t.Cleanup(s.Close)
+	// Ready with a nil engine: the size check runs in the decode step, before
+	// anything touches the engine.
+	s.Ready(nil, nil, TemplateInfo{})
+	h := s.Handler()
+
+	// Syntactically valid JSON, simply larger than the 64KB transport cap.
+	body := `{"sql":"` + strings.Repeat("A", 128<<10) + `"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/run", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized body = %d, want 413", rec.Code)
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	reason, _ := resp["reason"].(string)
+	if !strings.Contains(strings.ToLower(reason), "too large") {
+		t.Errorf("reason = %q, want it to say the body is too large", reason)
+	}
+	if strings.Contains(reason, "not valid JSON") {
+		t.Errorf("an oversized-but-valid body must not be reported as invalid JSON: %q", reason)
+	}
+}
+
 func TestClientIPPrefersFirstForwarded(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.RemoteAddr = "10.1.2.3:5555"

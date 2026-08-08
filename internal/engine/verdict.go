@@ -42,6 +42,14 @@ const (
 	// run does not simulate one. See hostile mode in loadgen/contend.go.
 	QualifierAcquisitionNotSimulated = "acquisition_not_simulated"
 
+	// QualifierContentionNotEngaged marks a SAFE hostile run where contention was
+	// REQUESTED but never actually exercised the acquisition wait: either no hold
+	// was held within the wait budget, or the migration's lock level did not
+	// conflict with the hold so the DDL never had to queue. The numbers are a
+	// default (uncontended) run's, and reading them as "tested under contention
+	// and passed" would be the false green light hostile mode exists to prevent.
+	QualifierContentionNotEngaged = "contention_not_engaged"
+
 	// FailureModeWritesErrored says the write rate collapsed because the traffic
 	// statements themselves started failing — not because a lock blocked them.
 	// The canonical case is a rename: after ALTER TABLE orders RENAME TO ...,

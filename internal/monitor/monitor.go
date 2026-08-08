@@ -85,6 +85,13 @@ type Report struct {
 	// StrongestLockMode is LockModes[0], hoisted out because it is the single
 	// fact that explains who was blocked.
 	StrongestLockMode string `json:"strongest_lock_mode,omitempty"`
+	// MigrationLockWaited is true if the migration's own backend was ever seen
+	// parked in a lock wait — it had to QUEUE for its lock behind another session.
+	// It is the server-side proof that a hostile hold actually engaged: a shape
+	// whose lock does not conflict with the hold acquires instantly and is never
+	// caught here. Unlike BlockedPeakCount this counts the migration itself, which
+	// the blocked-writer count deliberately excludes.
+	MigrationLockWaited bool `json:"migration_lock_waited"`
 	// Samples is how many polls completed successfully.
 	Samples int `json:"samples"`
 	// FailedSamples is how many polls failed. Non-zero means the numbers above
@@ -184,11 +191,12 @@ type Monitor struct {
 	// nobody, while a lock on a pre-existing relation is exactly what does.
 	preexisting []uint32
 
-	tracker blockedTracker
-	modes   map[string]struct{}
-	samples int
-	failed  int
-	lastErr error
+	tracker   blockedTracker
+	modes     map[string]struct{}
+	migWaited bool
+	samples   int
+	failed    int
+	lastErr   error
 }
 
 // New builds an unstarted Monitor.
@@ -295,23 +303,34 @@ func (m *Monitor) sample(ctx context.Context) {
 		m.record(err)
 		return
 	}
-	modes, err := m.queryLockModes(qctx)
-	if err != nil {
-		// The blocked count is still good; book it, then record the failure.
-		m.mu.Lock()
-		m.tracker.observe(time.Now(), blocked)
-		m.mu.Unlock()
-		m.record(err)
-		return
-	}
+	// The blocked count is the sample's spine. The two enrichment queries below —
+	// the migration's held lock modes and whether it is itself waiting for a lock
+	// — each contribute independently and each is allowed to fail without
+	// discarding the blocked count already in hand.
+	modes, modesErr := m.queryLockModes(qctx)
+	migWaiting, waitErr := m.queryMigrationWaiting(qctx)
 
 	m.mu.Lock()
 	m.tracker.observe(time.Now(), blocked)
 	for _, mode := range modes {
 		m.modes[mode] = struct{}{}
 	}
-	m.samples++
+	if migWaiting {
+		m.migWaited = true
+	}
+	if modesErr == nil && waitErr == nil {
+		// A poll counts as a completed sample only when the whole poll succeeded,
+		// so FailedSamples stays an honest measure of how much we could not see.
+		m.samples++
+	}
 	m.mu.Unlock()
+
+	if modesErr != nil {
+		m.record(modesErr)
+	}
+	if waitErr != nil {
+		m.record(waitErr)
+	}
 }
 
 func (m *Monitor) record(err error) {
@@ -346,6 +365,29 @@ func (m *Monitor) queryBlocked(ctx context.Context) (int, error) {
 		return 0, fmt.Errorf("monitor: blocked count: %w", err)
 	}
 	return n, nil
+}
+
+// queryMigrationWaiting reports whether the migration's OWN backend is, right
+// now, parked waiting for a lock. queryBlocked deliberately excludes the
+// migration from the writer count; this query is the opposite — it looks for
+// exactly the migration, because its wait is the evidence a hostile hold
+// engaged: the DDL had to queue behind the contention transaction to get its
+// lock. A migration whose lock does not conflict with the hold acquires at once
+// and never appears here.
+func (m *Monitor) queryMigrationWaiting(ctx context.Context) (bool, error) {
+	var waiting bool
+	err := m.conn.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM pg_stat_activity
+			WHERE datname = current_database()
+			  AND application_name = $1
+			  AND wait_event_type = 'Lock'
+			  AND state = 'active'
+			  AND pid <> pg_backend_pid())`, m.cfg.AppName).Scan(&waiting)
+	if err != nil {
+		return false, fmt.Errorf("monitor: migration wait: %w", err)
+	}
+	return waiting, nil
 }
 
 // queryLockModes returns the relation-level lock modes the migration currently
@@ -419,11 +461,12 @@ func (m *Monitor) StopAndReport() Report {
 	defer m.mu.Unlock()
 
 	rep := Report{
-		BlockedPeakCount: m.tracker.peak,
-		BlockedSeconds:   round1ms(m.tracker.blocked),
-		Samples:          m.samples,
-		FailedSamples:    m.failed,
-		LockModes:        sortModes(m.modes),
+		BlockedPeakCount:    m.tracker.peak,
+		BlockedSeconds:      round1ms(m.tracker.blocked),
+		MigrationLockWaited: m.migWaited,
+		Samples:             m.samples,
+		FailedSamples:       m.failed,
+		LockModes:           sortModes(m.modes),
 	}
 	if len(rep.LockModes) > 0 {
 		rep.StrongestLockMode = rep.LockModes[0]

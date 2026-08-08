@@ -126,9 +126,12 @@ const (
 
 // Contention is what Brace did to make the migration compete for its lock.
 type Contention struct {
-	// Enabled is whether hostile mode ran AND achieved a hold. False means the
-	// migration was measured against an uncontended table — the default, and the
-	// thing Qualifier warns about for AccessExclusive shapes.
+	// Enabled is whether hostile mode ran, achieved a hold, AND the migration was
+	// observed queuing behind that hold for its lock — a MEASURED overlap, never
+	// an assumed one. False means the migration was measured against an
+	// effectively uncontended table (the hold never engaged, or the shape's lock
+	// level does not conflict with it, so the DDL never had to wait), which is
+	// what Qualifier warns about.
 	Enabled bool `json:"enabled"`
 	// Requested is whether hostile mode was asked for. Requested && !Enabled is
 	// the honest "you asked and we could not deliver" case.
@@ -605,27 +608,19 @@ func (e *Engine) setPhase(phase string) {
 // variadic so that adding one never breaks a caller, and so the common case
 // (Rehearse(ctx, sql, mode)) still reads as one line.
 func (e *Engine) Rehearse(ctx context.Context, sql string, mode Mode, opts ...RunOption) (*RunResult, error) {
-	ro := runOptions{
-		TargetRows:   e.cfg.DefaultTargetRows,
-		TargetSource: e.cfg.DefaultTargetSource,
-		Hostile:      e.cfg.Hostile,
-		HostileHold:  e.cfg.HostileHold,
-		LockTimeout:  e.cfg.LockTimeout,
-	}
-	for _, opt := range opts {
-		if opt != nil {
-			opt(&ro)
-		}
-	}
+	ro := e.resolveOptions(opts)
 	mode, err := mode.normalize()
 	if err != nil {
 		return nil, err
 	}
-	as, err := Assess(sql)
+	as, err := assessForRun(sql, ro)
 	if err != nil {
 		// Includes the "already safe, don't waste a twin" case. No twin has
 		// been touched at this point, which is the whole point of pre-filtering
-		// before acquiring.
+		// before acquiring. The one carve-out lives in assessForRun: a hostile
+		// run on an already_safe shape that still takes ACCESS EXCLUSIVE is let
+		// through to a real rehearsal, because MEASURING that acquisition freeze
+		// is the entire point of hostile mode.
 		return nil, err
 	}
 
@@ -674,6 +669,69 @@ func (e *Engine) Rehearse(ctx context.Context, sql string, mode Mode, opts ...Ru
 		"classification", as.Classification)
 
 	return e.runOn(ctx, twin, as, mode, state, ro)
+}
+
+// resolveOptions folds the caller's per-run overrides onto the deployment's
+// defaults, producing the effective options one run will use. Rehearse and the
+// hostile-aware pre-check (AssessRun) share it so both reach the same admit
+// decision from the same hostile value — including BRACE_HOSTILE, which lives
+// only in the engine's config and is invisible to the HTTP layer.
+func (e *Engine) resolveOptions(opts []RunOption) runOptions {
+	ro := runOptions{
+		TargetRows:   e.cfg.DefaultTargetRows,
+		TargetSource: e.cfg.DefaultTargetSource,
+		Hostile:      e.cfg.Hostile,
+		HostileHold:  e.cfg.HostileHold,
+		LockTimeout:  e.cfg.LockTimeout,
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&ro)
+		}
+	}
+	return ro
+}
+
+// AssessRun pre-filters a statement exactly as Rehearse will, honouring this
+// run's options. The HTTP layer runs it synchronously so a bad statement is a
+// 400 on the submitting request — but it MUST make the same decision the engine
+// would, or the two disagree. The decisive case is hostile mode: without it, a
+// hostile run on an already_safe ACCESS EXCLUSIVE shape would be refused here
+// before it could measure the very freeze hostile mode exists to expose.
+func (e *Engine) AssessRun(sql string, opts ...RunOption) (*Assessment, error) {
+	return assessForRun(sql, e.resolveOptions(opts))
+}
+
+// assessForRun is Assess plus the hostile carve-out. Assess turns away the
+// catalog-only shapes with an already_safe rejection so a twin is not spent
+// proving a flat line — the right call for a default run. But hostile mode
+// exists to measure the one risk that fast-path assumes away: the wait to
+// ACQUIRE the lock behind an already-open transaction. So a hostile run on an
+// already_safe shape that still takes ACCESS EXCLUSIVE (the metadata-only ADD
+// COLUMN class) is allowed through to a real rehearsal. Everything else keeps
+// the fast-path: every non-hostile run, and any shape that takes no ACCESS
+// EXCLUSIVE lock, where a hold on the load target has nothing to conflict with.
+func assessForRun(sql string, ro runOptions) (*Assessment, error) {
+	as, err := Assess(sql)
+	if err == nil {
+		return as, nil
+	}
+	if ro.Hostile && as != nil && isAlreadySafeAccessExclusive(err, as) {
+		return as, nil
+	}
+	return as, err
+}
+
+// isAlreadySafeAccessExclusive reports whether err is the already_safe rejection
+// for a shape whose strongest lock is ACCESS EXCLUSIVE — the "fast but ACCESS
+// EXCLUSIVE" class whose only danger is the acquisition wait, which is exactly
+// what hostile mode reproduces.
+func isAlreadySafeAccessExclusive(err error, as *Assessment) bool {
+	var rej *RejectedError
+	if !errors.As(err, &rej) || rej.Kind != RejectAlreadySafe {
+		return false
+	}
+	return as.Lesson.ExpectedLock == "AccessExclusiveLock"
 }
 
 // RunOption is a per-run override.
@@ -877,53 +935,24 @@ func (e *Engine) runOn(ctx context.Context, twin *twins.Twin, as *Assessment, mo
 	e.mu.Unlock()
 	e.log.Info("engine.baseline", "run", state.RunID, "wps", res.BaselineWPS)
 
-	// 4b. Hostile mode. The baseline is deliberately already measured: contention
-	// costs throughput, and folding that into the baseline would make the freeze
-	// look smaller than it was. From here until the DDL returns, one session
-	// holds a transaction open against the load target, so the migration's lock
-	// request has to queue behind it — and every write that arrives after that
-	// request queues behind the request. That pile-up is the outage this rig
-	// otherwise cannot produce, and it is the whole reason a fast DDL is
-	// dangerous in production.
+	// 4b. Hostile mode. The baseline is deliberately already measured above:
+	// contention costs throughput, and folding that into the baseline would make
+	// the freeze look smaller than it was.
+	//
+	// The set-up below is ORDERED so that it straddles the dispatch. A fast DDL's
+	// danger is the wait to acquire its lock behind an already-open transaction,
+	// and a hold that is not active at the instant the migration requests its lock
+	// measures nothing — the DDL slips through the ~gap between two cycles and
+	// reports a freeze of zero. So the slow parts (the monitor, the migrator
+	// connection) are done first, then the hold is confirmed genuinely held, and
+	// only then is the migration dispatched into it.
 	res.Contention = Contention{Requested: ro.Hostile}
 	stopContention := func() {}
 	defer func() { stopContention() }()
-	if ro.Hostile {
-		hold := ro.HostileHold
-		if hold <= 0 {
-			hold = e.cfg.HostileHold
-		}
-		con := loadgen.NewContender(loadgen.ContendConfig{
-			DSN:       trafDSN,
-			Statement: loadgen.ContentionStatement(e.cfg.Labels),
-			Hold:      hold,
-			Logger:    e.cfg.Logger,
-		})
-		if err := con.Start(runCtx); err != nil {
-			// Contention is the run's premise, not an optional extra: continuing
-			// without it would produce a number labelled hostile that is not.
-			e.log.Warn("engine.contender_unavailable", "run", state.RunID, "err", err)
-			res.Contention.Note = "the contention session could not be started"
-		} else {
-			waitCtx, cancelWait := context.WithTimeout(runCtx, contentionWait)
-			holding := con.WaitHolding(waitCtx)
-			cancelWait()
-			stopContention = func() {
-				stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), teardownTimeout)
-				defer cancel()
-				st := con.Stop(stopCtx)
-				res.Contention.Cycles = st.Cycles
-				res.Contention.HoldSeconds = st.HoldSeconds
-			}
-			res.Contention.Enabled = holding
-			res.Contention.HoldSeconds = hold.Seconds()
-			if !holding {
-				res.Contention.Note = "no lock was ever held within the wait budget"
-			}
-		}
-	}
 
-	// 5. The monitor, then the crash.
+	// 5. The monitor. Started before the contender and the DDL so it is already
+	// sampling when the migration queues for its lock: the wait it records is the
+	// proof the DDL actually contended, which is what earns the hostile verdict.
 	mon := monitor.New(monitor.Config{
 		DSN:      twin.DSN,
 		AppName:  MigrationAppName,
@@ -935,6 +964,9 @@ func (e *Engine) runOn(ctx context.Context, twin *twins.Twin, as *Assessment, mo
 		e.log.Warn("engine.monitor_unavailable", "run", state.RunID, "err", err)
 	}
 
+	// 6. The migrator connection, established BEFORE the hold is confirmed. This
+	// connect can be slow; doing it here means it cannot burn the hold window and
+	// leave the DDL requesting its lock after the cycle has already committed.
 	migCtx, cancelMig := context.WithTimeout(runCtx, migratorConnTimeout)
 	migConn, err := connectAsMigrator(migCtx, twin.DSN, e.cfg.MigratorRole, e.migratorPassword)
 	cancelMig()
@@ -948,6 +980,51 @@ func (e *Engine) runOn(ctx context.Context, twin *twins.Twin, as *Assessment, mo
 		cancel()
 	}()
 
+	// 7. The contention hold, confirmed active immediately before dispatch. Start
+	// the contender and BLOCK until a transaction is provably holding its lock on
+	// the load target — WaitHolding does not return until the INSERT inside the
+	// held transaction has taken its row lock, so the hold is fresh with nearly a
+	// full cycle left. holdConfirmed gates every hostile claim below: with no
+	// confirmed hold there was nothing for the migration to queue behind, and the
+	// numbers are a default run's.
+	holdConfirmed := false
+	if ro.Hostile {
+		hold := ro.HostileHold
+		if hold <= 0 {
+			hold = e.cfg.HostileHold
+		}
+		res.Contention.HoldSeconds = hold.Seconds()
+		con := loadgen.NewContender(loadgen.ContendConfig{
+			DSN:       trafDSN,
+			Statement: loadgen.ContentionStatement(e.cfg.Labels),
+			Hold:      hold,
+			Logger:    e.cfg.Logger,
+		})
+		if startErr := con.Start(runCtx); startErr != nil {
+			// Contention is the run's premise, not an optional extra: continuing
+			// without it would produce a number labelled hostile that is not.
+			e.log.Warn("engine.contender_unavailable", "run", state.RunID, "err", startErr)
+			res.Contention.Note = "the contention session could not be started"
+		} else {
+			stopContention = func() {
+				stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), teardownTimeout)
+				defer cancel()
+				st := con.Stop(stopCtx)
+				res.Contention.Cycles = st.Cycles
+				res.Contention.HoldSeconds = st.HoldSeconds
+			}
+			waitCtx, cancelWait := context.WithTimeout(runCtx, contentionWait)
+			holdConfirmed = con.WaitHolding(waitCtx)
+			cancelWait()
+			if !holdConfirmed {
+				res.Contention.Note = "no lock was ever held within the wait budget"
+			}
+		}
+	}
+
+	// 8. The crash — dispatched now, while the hold (if any) is confirmed active,
+	// so the migration requests its lock INTO live contention rather than into a
+	// race with the cycle timer.
 	e.setPhase(phaseMigrating)
 	t0 := time.Now()
 	res.DDLStartT = smp.since(t0)
@@ -989,6 +1066,22 @@ func (e *Engine) runOn(ctx context.Context, twin *twins.Twin, as *Assessment, mo
 	smp.stop()
 	stopLoad()
 	final := gen.Snapshot()
+
+	// Hostile mode's Enabled flag is EARNED, never latched from "a hold started
+	// once". It is true only when a hold was confirmed active at dispatch AND the
+	// migration was then observed waiting for its lock — i.e. it actually queued
+	// behind the hold. A shape whose lock does not conflict with the hold (an
+	// ALTER INDEX ... RENAME takes only SHARE UPDATE EXCLUSIVE on PG12+) acquires
+	// without ever waiting: it did not contend, so it must not be reported as
+	// though it did, and the confident "strongest green light" note stays out of
+	// reach. If the monitor never got to look, we cannot claim the overlap either
+	// — Enabled stays false, which is the honest direction.
+	if ro.Hostile && holdConfirmed {
+		res.Contention.Enabled = monReport.MigrationLockWaited
+		if !res.Contention.Enabled && res.Contention.Note == "" {
+			res.Contention.Note = "the migration never had to wait for its lock — its lock level does not conflict with the hold, so the acquisition wait was not exercised"
+		}
+	}
 
 	// 8. An INVALID index is the CONCURRENTLY failure mode. Check whenever the
 	// statement was concurrent — a build can be left invalid even on paths
@@ -1158,6 +1251,13 @@ func qualifierFor(res *RunResult, as *Assessment, mon monitor.Report) string {
 		// That is a measurement, not an assumption.
 		return ""
 	}
+	if res.Contention.Requested {
+		// Hostile was asked for but the DDL never actually contended — no hold was
+		// held in time, or its lock did not conflict with the hold. The SAFE
+		// verdict is a default run's, and it must say the acquisition wait was not
+		// exercised rather than read as a passed contention test.
+		return QualifierContentionNotEngaged
+	}
 	if !takesAccessExclusive(as, mon) {
 		return ""
 	}
@@ -1270,10 +1370,14 @@ func baseNote(res *RunResult, as *Assessment, mon monitor.Report) string {
 		return fmt.Sprintf("Measured with contention: Brace held a transaction open on the load target for %.1fs at a "+
 			"time while the migration ran, and writes still kept flowing. That is the acquisition risk tested rather "+
 			"than assumed away — the strongest green light this rig can give.", res.Contention.HoldSeconds)
-	case res.Qualifier == QualifierAcquisitionNotSimulated:
-		// The false-SAFE this rig used to ship. Placed above the scale warning
-		// because for these shapes the scale projection is suppressed anyway (the
-		// work is constant-time) and the acquisition wait is the whole story.
+	case res.Qualifier == QualifierAcquisitionNotSimulated && res.ScaleWarning == "":
+		// The false-SAFE this rig used to ship. It wins over the acquisition note
+		// ONLY when there is no scale warning: for a constant-time ACCESS EXCLUSIVE
+		// shape the projection is suppressed and the acquisition wait is the whole
+		// story. But an O(rows) shape (SET NOT NULL, ALTER COLUMN TYPE) that
+		// measured SAFE on the twin still gets a quantified scale veto — an
+		// EffectiveVerdict of UNSAFE with a number — and that veto must not be
+		// hidden behind the softer "you didn't test acquisition" line.
 		return fmt.Sprintf("No freeze was measured — and this run did not test the thing that actually makes %s "+
 			"dangerous. It takes ACCESS EXCLUSIVE, which conflicts with every other lock mode including plain SELECT. "+
 			"Here it got that lock instantly because nothing was holding the table. In production it waits behind your "+
