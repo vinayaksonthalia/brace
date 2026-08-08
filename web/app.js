@@ -465,6 +465,7 @@ const API = window.BRACE_API_BASE || (/^web-[^.]+\./.test(location.host)
     runHint: $('#runHint'),
     report: $('#reportBody'),
     reportNotice: $('#reportNotice'),
+    reportScope: $('#reportScope'),
     reportNote: $('#reportNote'),
     presets: Array.prototype.slice.call(document.querySelectorAll('.preset'))
   };
@@ -529,6 +530,76 @@ const API = window.BRACE_API_BASE || (/^web-[^.]+\./.test(location.host)
     requestAnimationFrame(step);
   }
 
+  // tickTo, or set the final value outright when a report is being restored
+  // (a re-rendered "previous" run should not re-animate as if it were live).
+  function put(node, value, format, ms, animate) {
+    if (!node) return;
+    if (animate === false) { node.textContent = format(value); return; }
+    tickTo(node, value, format, ms);
+  }
+
+  /* The scope badge next to "crash report" names WHICH run the panel is
+     showing, so a report can never silently belong to the wrong input:
+       none      empty state — no badge
+       live      a run is dispatching/on the rig — "in progress", pulsing
+       current   the run just completed — "this run"
+       previous  an older run, shown because a new one failed to dispatch */
+  var SCOPE = {
+    none:     { text: '', cls: '', hidden: true },
+    live:     { text: 'in progress', cls: 'panel__scope--live' },
+    current:  { text: 'this run', cls: '' },
+    previous: { text: 'previous run', cls: 'panel__scope--prev' }
+  };
+  function setReportScope(kind) {
+    if (!el.reportScope) return;
+    var s = SCOPE[kind] || SCOPE.current;
+    el.reportScope.hidden = !!s.hidden;
+    el.reportScope.textContent = s.text;
+    el.reportScope.className = 'panel__scope' + (s.cls ? ' ' + s.cls : '');
+  }
+
+  // The in-progress card: the panel rehearsing, echoing the SQL that was
+  // actually submitted — so it can never look like the previous report.
+  function dispatchingCard(sql) {
+    var n = document.createElement('div');
+    n.className = 'working working--dispatch';
+    var tag = document.createElement('span');
+    tag.className = 'working__tag';
+    tag.textContent = 'rehearsing your migration';
+    var p = document.createElement('p');
+    p.textContent = 'Dispatching to the rig. The report card lands the moment the twin stops moving.';
+    n.appendChild(tag);
+    n.appendChild(p);
+    var trimmed = (sql || '').trim();
+    if (trimmed) {
+      var pre = document.createElement('pre');
+      pre.className = 'working__sql';
+      pre.textContent = trimmed;
+      n.appendChild(pre);
+    }
+    return n;
+  }
+
+  function blankNode() {
+    return initialBlank ? initialBlank.cloneNode(true) : document.createElement('div');
+  }
+
+  // A new run failed to dispatch. Never leave the in-progress card stranded:
+  // restore the last real report, clearly marked "previous", or the empty
+  // state if there is no prior run to fall back to.
+  function restorePreviousReport() {
+    if (lastFinishedEv) {
+      renderReport(lastFinishedEv, {
+        scope: 'previous', static: true,
+        note: 'run ' + (lastFinishedEv.run_id || '') + ' · previous'
+      });
+    } else {
+      setReportScope('none');
+      swapReport(function () { return blankNode(); });
+      el.reportNote.textContent = 'awaiting run';
+    }
+  }
+
   var chart = Chart($('#chart'));
   var state = 'idle';
   var api = null;
@@ -539,6 +610,14 @@ const API = window.BRACE_API_BASE || (/^web-[^.]+\./.test(location.host)
   var targetWps = 0;
   var currentRun = null;
   var seeded = false;
+  // The report panel is a small state machine of its own. These track it so
+  // a stale report can never masquerade as the run that is being dispatched.
+  var lastFinishedEv = null;   // last completed run, for the "previous" fallback
+  var activeRunId = null;      // the run currently on the rig (dispatch → finish)
+  var dispatchedRunId = null;  // the run this browser just submitted
+  // the empty-state markup, cloned back when there is nothing to show
+  var initialBlank = el.report.firstElementChild
+    ? el.report.firstElementChild.cloneNode(true) : null;
 
   /* One place decides how every control and label reads in each state,
      so the arc can never half-apply itself. */
@@ -628,24 +707,34 @@ const API = window.BRACE_API_BASE || (/^web-[^.]+\./.test(location.host)
 
   function onRunStarted(ev) {
     currentRun = ev;
+    activeRunId = ev.run_id || activeRunId;
     clearNotice();
     chart.mark();
     setState('running');
     el.twin.textContent = ev.twin || 'cloning…';
     el.twin.dataset.live = '1';
+    // the run is on the rig now — the panel is live, not showing a past result
+    setReportScope('live');
     el.reportNote.textContent = 'run ' + (ev.run_id || '') + ' · ' + (ev.mode || 'custom');
     swapReport(function () { return runningCard(ev); });
   }
 
   function onRunFinished(ev) {
+    // Tie the panel to the run that was actually dispatched: a stray finish
+    // (e.g. a last_run repaint from the stats stream) for a different run must
+    // not stomp the run currently on the rig.
+    if (activeRunId && ev && ev.run_id && ev.run_id !== activeRunId) return;
     currentRun = null;
+    activeRunId = null;
+    dispatchedRunId = null;
     clearNotice();
     clearInterval(freezeTimer); freezeTimer = null;
     chart.closeBand();
     setState('idle');
     el.twin.dataset.live = '0';
     el.twin.textContent = (ev.twin || el.twin.textContent) + ' · discarded';
-    el.reportNote.textContent = 'run ' + (ev.run_id || '') + ' · complete';
+    lastFinishedEv = ev;
+    // renderReport sets the scope ("this run") and the header note
     renderReport(ev);
     refreshStatus();
   }
@@ -681,6 +770,16 @@ const API = window.BRACE_API_BASE || (/^web-[^.]+\./.test(location.host)
     n.querySelector('p').textContent = ev.mode === 'safe'
       ? 'Watch the line. A safe migration never dips, and this card fills in when the build finishes.'
       : 'Watch the line. The moment it takes a blocking lock, writes stop and the timer starts.';
+    // echo the SQL for the whole run, so the in-progress panel always shows
+    // which migration it belongs to (the console is disabled mid-run, so its
+    // value is still the submitted SQL when the stream omits it)
+    var sql = (ev.sql || (el.sql && el.sql.value) || '').trim();
+    if (sql) {
+      var pre = document.createElement('pre');
+      pre.className = 'working__sql';
+      pre.textContent = sql;
+      n.appendChild(pre);
+    }
     return n;
   }
 
@@ -923,7 +1022,7 @@ const API = window.BRACE_API_BASE || (/^web-[^.]+\./.test(location.host)
      presented the product as fact. It is gone. This shows only the
      engine's own scale_projection, clearly labelled a projection, and
      shows nothing at all when the engine did not make one. */
-  function renderProjection(card, ev) {
+  function renderProjection(card, ev, animate) {
     var wrap = slot(card, 'projWrap');
     if (!wrap) return;
     var sp = ev.scale_projection;
@@ -934,8 +1033,8 @@ const API = window.BRACE_API_BASE || (/^web-[^.]+\./.test(location.host)
       : num(sp.target_rows);
     var proj = slot(card, 'projected');
     proj.innerHTML = '~<b data-n="p"></b> freeze projected at ' + rows + ' rows';
-    tickTo(proj.querySelector('[data-n="p"]'), sp.projected_blocked_seconds,
-      function (v) { return (Math.round(v * 10) / 10).toFixed(1) + 's'; }, 900);
+    put(proj.querySelector('[data-n="p"]'), sp.projected_blocked_seconds,
+      function (v) { return (Math.round(v * 10) / 10).toFixed(1) + 's'; }, 900, animate);
 
     var f = slot(card, 'formula');
     if (f) {
@@ -1005,7 +1104,17 @@ const API = window.BRACE_API_BASE || (/^web-[^.]+\./.test(location.host)
     swapReport(function () { return card; });
   }
 
-  function renderReport(ev) {
+  function renderReport(ev, opts) {
+    opts = opts || {};
+    var scope = opts.scope || 'current';
+    var animate = opts.static !== true;
+    // the panel names which run it is showing, and its header note, up front —
+    // before any early return — so scope is always consistent with the card
+    setReportScope(scope);
+    el.reportNote.textContent = (opts.note != null)
+      ? opts.note
+      : 'run ' + (ev.run_id || '') + ' · ' + (scope === 'previous' ? 'previous' : 'complete');
+
     var measured = String(ev.verdict || '').toUpperCase();
     var effective = String(ev.effective_verdict || ev.verdict || '').toUpperCase();
 
@@ -1039,8 +1148,8 @@ const API = window.BRACE_API_BASE || (/^web-[^.]+\./.test(location.host)
       var mixA = slot(card, 'mix');
       if (mixA) mixA.remove();
     } else {
-      tickTo(slot(card, 'freeze'), ev.blocked_seconds || 0, asSecs, 900);
-      tickTo(slot(card, 'died'), total, function (v) { return num(v) + ' writes'; }, 900);
+      put(slot(card, 'freeze'), ev.blocked_seconds || 0, asSecs, 900, animate);
+      put(slot(card, 'died'), total, function (v) { return num(v) + ' writes'; }, 900, animate);
 
       var mix = slot(card, 'mix');
       if (byLabel && total > 0) {
@@ -1061,7 +1170,7 @@ const API = window.BRACE_API_BASE || (/^web-[^.]+\./.test(location.host)
     renderTeach(card, ev, acqNotSim);
     renderDivergence(card, ev, safe);
     renderWreckage(card, ev);
-    renderProjection(card, ev);
+    renderProjection(card, ev, animate);
     renderContention(card, ev);
 
     slot(card, 'duration').textContent = ev.duration_seconds != null
@@ -1216,15 +1325,28 @@ const API = window.BRACE_API_BASE || (/^web-[^.]+\./.test(location.host)
     var sql = el.sql.value;
     var hostile = !!(el.hostile && el.hostile.checked);
     clearNotice();
+    dispatchedRunId = null;
     el.reportNote.textContent = 'dispatching';
     el.chamberState.textContent = 'loading the rig';   // pre-accept; setState takes over on run_started
 
+    // The moment a run is submitted, the previous report stops being "this
+    // run": show the panel rehearsing the SQL that was actually typed, so it
+    // can never read as if an old report described the new input.
+    setReportScope('live');
+    swapReport(function () { return dispatchingCard(sql); });
+
     api.run(sql, { hostile: hostile }).then(function (res) {
       // run_started arrives on the stream; this only confirms acceptance.
+      dispatchedRunId = res.run_id || null;
+      activeRunId = res.run_id || activeRunId;
       el.reportNote.textContent = 'run ' + (res.run_id || '') + ' accepted';
     }).catch(function (err) {
+      // The dispatch failed. Clear the in-progress state — never leave the
+      // panel stuck "dispatching" — and put the last real report back,
+      // clearly marked "previous", beneath the dismissible notice.
       var body = (err && err.body) || {};
       setState('idle');
+      restorePreviousReport();
       if (err.status === 400) showRejected(body);
       else if (err.status === 409) { showSimple('tpl-busy'); el.reportNote.textContent = 'rig busy'; }
       else if (err.status === 503) { setState('prep'); showPreparing(body.eta_seconds); }
@@ -1269,6 +1391,7 @@ const API = window.BRACE_API_BASE || (/^web-[^.]+\./.test(location.host)
     el.sql.value = PRESETS.naive;
     syncPresets();
     setState('idle');
+    setReportScope('none');   // no run yet — the badge stays off until one lands
     if (api.history) { chart.seed(api.history()); seeded = true; }
     refreshStatus();
     setInterval(refreshStatus, 10000);
@@ -1285,8 +1408,13 @@ const API = window.BRACE_API_BASE || (/^web-[^.]+\./.test(location.host)
     if (api.hydrate) {
       api.hydrate().then(function (lr) {
         if (lr && !currentRun && state === 'idle' && el.report.querySelector('.blank')) {
-          renderReport(lr);
-          el.reportNote.textContent = 'run ' + (lr.run_id || '') + ' · last run';
+          // a reload restores the last run, but it is not "this run" — it
+          // predates this session, so it is labelled a previous result
+          lastFinishedEv = lr;
+          renderReport(lr, {
+            scope: 'previous', static: true,
+            note: 'run ' + (lr.run_id || '') + ' · last run'
+          });
         }
       }).catch(function () {});
     }

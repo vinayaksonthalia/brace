@@ -285,6 +285,17 @@ main{
   padding:2px 6px; border:1px solid var(--amber-dim); border-radius:var(--r-pill);
   font-size:9px; letter-spacing:.1em; vertical-align:middle;
 }
+/* a run is on the rig right now — pulsing, so it never reads as a result */
+.panel__scope--live{
+  color:var(--amber); border-color:var(--amber);
+  display:inline-flex; align-items:center; gap:5px;
+}
+.panel__scope--live::before{
+  content:""; width:5px; height:5px; border-radius:50%; background:var(--amber);
+  animation:beat 1.2s ease-in-out infinite;
+}
+/* an older run, shown because a new one failed to dispatch — muted, not amber */
+.panel__scope--prev{ color:var(--ink-3); border-color:var(--edge); }
 .panel__note{
   font-size:9.5px; letter-spacing:.13em; text-transform:uppercase; color:var(--ink-3);
   text-align:right; min-width:0;
@@ -538,6 +549,14 @@ main{
 .working__tag::before{
   content:""; width:6px; height:6px; border-radius:50%; background:var(--amber);
   animation:beat 1.2s ease-in-out infinite;
+}
+/* the dispatching card echoes the SQL being run, so the in-progress panel
+   is unmistakably about the new input — never the previous report */
+.working__sql{
+  margin:var(--s4) 0 0; padding:var(--s3);
+  background:var(--well); border:1px solid var(--edge); border-radius:var(--r-sm);
+  font-family:var(--mono); font-size:12px; line-height:1.55; color:var(--ink-2);
+  white-space:pre-wrap; word-break:break-word; max-height:132px; overflow:auto;
 }
 
 .card{ width:100%; animation:land var(--t-slow) var(--ease-strong) both; }

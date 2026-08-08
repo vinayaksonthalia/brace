@@ -194,7 +194,7 @@ document.documentElement.setAttribute('data-theme',t);})();</script>
   <!-- REPORT -->
   <section class="panel report" aria-label="Crash report">
     <header class="panel__head">
-      <h2>crash report <span class="panel__scope">this run</span></h2>
+      <h2>crash report <span class="panel__scope" id="reportScope" hidden>this run</span></h2>
       <span class="panel__note" id="reportNote">awaiting run</span>
     </header>
     <!-- Transient notices (rejected SQL, rig busy, rate-limited, warming a
