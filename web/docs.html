@@ -120,7 +120,19 @@ document.documentElement.className+=' js';})();</script>
           <p class="navgroup__label">Reference</p>
           <ul>
             <li><a class="navlink" href="#api" data-nav><span class="navlink__ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M6.4 2.6C5 2.6 5.2 4 5.2 5.4 5.2 6.8 4.3 7.2 3.4 7.2c.9 0 1.8.4 1.8 1.8 0 1.4-.2 2.8 1.2 2.8M9.6 2.6c1.4 0 1.2 1.4 1.2 2.8 0 1.4.9 1.8 1.8 1.8-.9 0-1.8.4-1.8 1.8 0 1.4.2 2.8-1.2 2.8"/></svg></span><span>API reference</span></a></li>
+          </ul>
+        </div>
+        <div class="navgroup">
+          <p class="navgroup__label">Honesty</p>
+          <ul>
+            <li><a class="navlink" href="#fixed" data-nav><span class="navlink__ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M10.6 2.6a2.9 2.9 0 0 0-3.8 3.6L2.7 10.3a1.4 1.4 0 0 0 2 2l4.1-4.1a2.9 2.9 0 0 0 3.6-3.8l-1.7 1.7-1.6-.4-.4-1.6z"/></svg></span><span>What we got wrong</span></a></li>
             <li><a class="navlink" href="#limits" data-nav><span class="navlink__ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2.4 1.6 13.2h12.8z"/><path d="M8 6.5v3.1M8 11.3v.01"/></svg></span><span>Honest limits</span></a></li>
+          </ul>
+        </div>
+        <div class="navgroup">
+          <p class="navgroup__label">The stack</p>
+          <ul>
+            <li><a class="navlink" href="#stack" data-nav><span class="navlink__ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2 2 5l6 3 6-3z"/><path d="M2 8l6 3 6-3M2 11l6 3 6-3"/></svg></span><span>The stack</span></a></li>
             <li><a class="navlink" href="#zerops" data-nav><span class="navlink__ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="2.4" y="2.8" width="11.2" height="4.2" rx="1.2"/><rect x="2.4" y="9" width="11.2" height="4.2" rx="1.2"/><path d="M5 4.9h.01M5 11.1h.01"/></svg></span><span>Why Zerops</span></a></li>
           </ul>
         </div>
@@ -802,6 +814,33 @@ pg_restore -U &lt;superuser&gt; -d brace_template your-dump.dump</pre>
     </section>
 
     <!-- ══ 11 · HONEST LIMITS ═══════════════════════════════════ -->
+    <!-- ══ WHAT WE GOT WRONG — AND FIXED ═══════════════════════ -->
+    <section class="doc-sec reveal" id="fixed" data-title="What we got wrong">
+      <p class="eyebrow">Honesty · the fixes</p>
+      <h2>What we got wrong — and fixed.</h2>
+      <p class="doc-lede">A tool that tells you a migration is safe has to be right, so the ways Brace was once <em>wrong</em> are worth naming. Each of these was a real bug caught before submission; each is fixed; each changed how the engine works today. They are here because a measurement tool earns trust by showing its scars, not by hiding them.</p>
+
+      <h3>The load ran as superuser</h3>
+      <p><strong class="lead-in">What broke:</strong> the write traffic once ran as the database superuser. A migration is caller-supplied SQL, and a <code>CHECK</code> constraint or column <code>DEFAULT</code> is evaluated as the session that <em>writes</em> the row — so a smuggled expression could have called <code>pg_read_file()</code> as superuser. <strong class="lead-in">The fix:</strong> two least-privilege roles — <code>brace_migrator</code> and <code>brace_traffic</code>, both <code>NOSUPERUSER NOCREATEDB</code> — so the <em>role</em>, not a regex, is the boundary. The allow-list is now only UX and blast-radius hygiene; the privilege floor is what actually contains hostile SQL.</p>
+
+      <h3>A migration could read SAFE when it wasn't</h3>
+      <p><strong class="lead-in">What broke:</strong> several shapes could earn a false green light — a <code>DEFAULT</code> using a volatile function that silently rewrites the table, a statement against a table the lab doesn't have (fast-pathed to SAFE), an O(rows) change that finished fast on a small twin. <strong class="lead-in">The fix:</strong> the monitor's <em>observed lock mode</em> is now the arbiter of whether a freeze is even possible; a nonexistent relation is <code>REJECTED</code>, never blessed; and the <a href="#scale">scale projection</a> can escalate a twin-SAFE result to <code>UNSAFE</code> at your real row count. A <code>SAFE</code> now has to survive all three.</p>
+
+      <h3>The dangerous half of a fast statement was invisible</h3>
+      <p><strong class="lead-in">What broke:</strong> a metadata-only <code>ALTER TABLE … ADD COLUMN</code> takes <code>ACCESS EXCLUSIVE</code> but gets it instantly on an idle twin — so it measured SAFE, hiding that in production it waits behind your longest open transaction while every query queues behind it. <strong class="lead-in">The fix:</strong> that verdict now carries the <code>acquisition_not_simulated</code> qualifier, and <a href="#hostile">hostile mode</a> holds a real transaction so the acquisition wait is measured, not assumed.</p>
+
+      <h3>The projection once invented a freeze</h3>
+      <p><strong class="lead-in">What broke:</strong> an early scale model projected a phantom freeze onto shapes that don't block writes at all, turning a genuinely safe change red. <strong class="lead-in">The fix:</strong> the projection only ever escalates a measured <code>SAFE</code> to <code>UNSAFE</code> — it never manufactures a number for a non-write-blocking shape, and an <code>ERRORED</code> or <code>INCONCLUSIVE</code> run emits no projection at all. It is labelled an assumption everywhere it appears.</p>
+
+      <h3>The platform proxy silently downgraded the MCP</h3>
+      <p><strong class="lead-in">What broke:</strong> the hosted endpoint's <code>POST /mcp/</code> was rewritten to a <code>307 → GET /mcp</code> by the platform proxy, which broke the streamable-HTTP handshake — the remote MCP looked dead through no fault of its own. <strong class="lead-in">The fix:</strong> an ASGI path-normalising wrapper serves both <code>/mcp</code> and <code>/mcp/</code> directly, so an agent connects whether or not its client sends the trailing slash.</p>
+
+      <div class="callout">
+        <span class="callout__mark">why this page exists</span>
+        <p>Every fix above made the engine say <em>less</em> — fewer confident greens, more honest qualifiers. A crash-test tool is only worth running if it would rather say "I didn't test that" than tell you a comfortable lie.</p>
+      </div>
+    </section>
+
     <section class="doc-sec reveal" id="limits" data-title="Honest limits">
       <p class="eyebrow">Honest limits</p>
       <h2>Where the rehearsal stops matching reality.</h2>
@@ -830,6 +869,33 @@ pg_restore -U &lt;superuser&gt; -d brace_template your-dump.dump</pre>
     </section>
 
     <!-- ══ 12 · WHY ZEROPS ══════════════════════════════════════ -->
+    <!-- ══ THE STACK — AND WHY ═════════════════════════════════ -->
+    <section class="doc-sec reveal" id="stack" data-title="The stack">
+      <p class="eyebrow">The stack · and why</p>
+      <h2>Every piece is boring on purpose.</h2>
+      <p class="doc-lede">Brace measures the truth about a database under load, so the stack's only job is to stay out of the way of that measurement. Nothing here is chosen to be fashionable — each piece is the one that lets Brace watch a real lock without a layer of abstraction lying about it.</p>
+
+      <h3>Go for the engine — because one run is a concurrency problem</h3>
+      <p>A single rehearsal runs three things at once against one twin: dozens of labelled write workers, a lock monitor sampling <code>pg_locks</code> every 250&nbsp;ms, and the migration itself. That is a goroutine problem — cheap concurrency, precise cancellation, one static binary with no runtime to install. The engine talks to Postgres through <a href="https://github.com/jackc/pgx" target="_blank" rel="noopener noreferrer">pgx</a> rather than the lowest-common-denominator driver, because it needs the real protocol: to read <code>pg_stat_activity</code>, to set <code>lock_timeout</code> per connection, and to run DDL in autocommit — which <code>CREATE INDEX CONCURRENTLY</code> requires.</p>
+
+      <h3>Raw SQL, no ORM — because the SQL <em>is</em> the subject</h3>
+      <p>Brace's entire job is to run <em>your</em> exact statement and watch what lock it takes. An ORM exists to hide SQL and locking behind objects — the precise thing being measured. So there is no ORM and no query builder: the migration is your string, the load is three hand-written statements, and the lock readings come straight from the catalog. The role a statement runs as is the <a href="#byod">security boundary</a>, not a query layer.</p>
+
+      <h3>A Postgres it owns, not a managed slice — because the feature set demands it</h3>
+      <p>The twin mechanism needs three things managed Postgres almost always forbids: <strong>superuser</strong> (to create and drop databases every run), native <code>CREATE DATABASE … TEMPLATE</code> cloning, and direct reads of <code>pg_locks</code>. That is why Brace runs its own PostgreSQL&nbsp;16 instead of pointing at a hosted database — and why <a href="#zerops">Zerops</a>, which hands you a Postgres you actually own, is the natural home.</p>
+
+      <h3>FastMCP + Python for the agent endpoint — kept deliberately thin</h3>
+      <p>The <a href="#mcp">MCP server</a> is <a href="https://github.com/jlowin/fastmcp" target="_blank" rel="noopener noreferrer">FastMCP</a> on Python, because the MCP client ecosystem is Python-first and FastMCP is its reference implementation. It holds <strong>no</strong> measurement logic: it shapes an agent's <code>check_migration</code> call into an HTTP request to the Go engine, maps every failure to a typed status, and gets out of the way. All the truth lives in one place — the engine — so the CLI, the web lab and the MCP can never disagree about a verdict.</p>
+
+      <h3>A static frontend, no framework — because it is one stream</h3>
+      <p>The dashboard is a single Server-Sent Events stream driving DOM updates. A front-end framework would add a build step and a bundle for a page that is, structurally, one <code>EventSource</code> and a chart. So it is vanilla HTML/CSS/JS with no build — and <strong>progressively enhanced</strong>: the docs and lab stay readable and navigable with JavaScript switched off entirely.</p>
+
+      <div class="callout">
+        <span class="callout__mark">the throughline</span>
+        <p>One measurement engine in Go, spoken to three ways — web, CLI, MCP — against a Postgres Brace owns. Every choice removes a layer that could stand between you and what the database actually did.</p>
+      </div>
+    </section>
+
     <section class="doc-sec reveal" id="zerops" data-title="Why Zerops">
       <p class="eyebrow">Architecture · Why Zerops</p>
       <h2>What Brace needs from its infrastructure — and how Zerops provides it.</h2>
