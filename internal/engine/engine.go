@@ -1119,7 +1119,16 @@ func (e *Engine) runOn(ctx context.Context, twin *twins.Twin, as *Assessment, mo
 	res.CasualtiesAllPhases = final.CasualtiesTotal
 	res.ErroredTotal = final.ErroredTotal
 	res.ErroredDuringDDL = final.ErroredTotal - atStart.erred
-	res.Verdict = verdictFor(res.BlockedSeconds, res.Casualties.Total)
+	// The migration's OBSERVED lock is the arbiter of whether the write rate
+	// collapsing was a lock freeze at all. A write-rate dip under a lock that does
+	// not conflict with writes — CREATE INDEX CONCURRENTLY's SHARE UPDATE
+	// EXCLUSIVE, VACUUM, ANALYZE — is I/O and CPU contention from the work
+	// competing for the disk on a shared box, not a freeze, and must not produce
+	// an UNSAFE verdict. A tool that cries UNSAFE at a genuinely safe migration on
+	// measurement noise is broken. See migrationHeldWriteBlockingLock and
+	// verdictForObserved; real casualties (dead writes) still count.
+	heldWriteBlockingLock := migrationHeldWriteBlockingLock(as, monReport)
+	res.Verdict = verdictForObserved(res.BlockedSeconds, res.Casualties.Total, heldWriteBlockingLock)
 	if res.Error != "" && !guarded {
 		// Postgres refused the statement: nothing was measured, so no SAFE/UNSAFE
 		// claim is honest here. See VerdictErrored.
@@ -1145,15 +1154,23 @@ func (e *Engine) runOn(ctx context.Context, twin *twins.Twin, as *Assessment, mo
 	// sample is not the freeze production gets: lock presence is scale-free, lock
 	// duration is not. Verdict above stays exactly what was measured;
 	// EffectiveVerdict is what a deploy gate should read.
-	res.ScaleProjection = projectScale(scaleInputs{
-		Measured:       res.BlockedSeconds,
-		TwinRows:       e.cfg.TwinRows,
-		TargetRows:     ro.TargetRows,
-		ScalesWithRows: as.Lesson.ScalesWithRows,
-		BlocksWrites:   as.Lesson.BlocksWrites,
-		ScaleUncertain: as.Lesson.ScaleUncertain,
-		Verdict:        res.Verdict,
-		TargetSource:   ro.TargetSource,
+	//
+	// Two gates keep a projection honest here: it fires only for a run that
+	// actually MEASURED something (scaleProjectionFor drops it for ERRORED /
+	// INCONCLUSIVE), and only when the freeze it would scale was a real
+	// write-freeze — a dip under a non-write-blocking lock (CONCURRENTLY, VACUUM)
+	// carries HeldWriteBlockingLock=false and is never projected, because the same
+	// lock is merely held longer on a bigger table without freezing anybody.
+	res.ScaleProjection = scaleProjectionFor(res.Verdict, scaleInputs{
+		Measured:              res.BlockedSeconds,
+		TwinRows:              e.cfg.TwinRows,
+		TargetRows:            ro.TargetRows,
+		ScalesWithRows:        as.Lesson.ScalesWithRows,
+		BlocksWrites:          as.Lesson.BlocksWrites,
+		ScaleUncertain:        as.Lesson.ScaleUncertain,
+		HeldWriteBlockingLock: heldWriteBlockingLock,
+		Verdict:               res.Verdict,
+		TargetSource:          ro.TargetSource,
 	})
 	res.EffectiveVerdict = effectiveVerdict(res.Verdict, res.ScaleProjection)
 	res.ScaleWarning = scaleWarning(res.Verdict, res.ScaleProjection)
@@ -1265,6 +1282,32 @@ func conflictsWithWriteHold(expectedLock string) bool {
 	}
 }
 
+// migrationHeldWriteBlockingLock reports whether the migration held a lock that
+// conflicts with writes (ROW EXCLUSIVE) on a relation that existed BEFORE the run
+// — the only kind of lock that can actually freeze the application's writes.
+//
+// The MONITOR is the arbiter when it has data. monitor.LockModes are precisely
+// the modes the migration held on PRE-EXISTING relations: a CREATE INDEX
+// CONCURRENTLY build takes ACCESS EXCLUSIVE on the NEW index it is creating, but
+// that OID did not exist when the run began and is excluded, so what remains is
+// the SHARE UPDATE EXCLUSIVE it holds on the table — which does not conflict with
+// writes. An observed set of modes is therefore empirical ground truth, and is
+// preferred over the static shape prediction. When the monitor never got to see a
+// held mode (it was degraded, or the lock was too brief to sample), fall back to
+// the shape prediction, which errs toward "blocks" — so a freeze is never
+// suppressed on a shape we could not observe and cannot vouch for.
+func migrationHeldWriteBlockingLock(as *Assessment, mon monitor.Report) bool {
+	if len(mon.LockModes) > 0 {
+		for _, m := range mon.LockModes {
+			if conflictsWithWriteHold(m) {
+				return true
+			}
+		}
+		return false
+	}
+	return as != nil && as.Lesson.BlocksWrites
+}
+
 // qualifierFor decides whether this run's SAFE is the whole answer.
 //
 // It is not, for the entire class of statements whose danger is the WAIT rather
@@ -1361,6 +1404,15 @@ func noteFor(res *RunResult, as *Assessment, mon monitor.Report) string {
 // plus the acquisition_not_simulated qualifier is exactly the honest reading.
 func explanationFor(res *RunResult, as *Assessment) string {
 	base := as.Lesson.Explanation
+	if res.Verdict == VerdictErrored || res.Verdict == VerdictInconclusive {
+		// The statement never produced a measurement — it failed to execute, or the
+		// guard aborted it before it finished. The per-class lesson still describes
+		// the SHAPE, but nothing here was measured, so it must be framed as general
+		// behaviour rather than a finding about this run. Anything measured-sounding
+		// on a run that never ran (a freeze story, a scale projection) is a lie.
+		return "This statement did not run to a measured result, so the following is the general behaviour of this " +
+			"shape, not a measurement of this run. " + base
+	}
 	claimsSafe := !as.Lesson.BlocksWrites || as.Lesson.TriviallySafe
 	froze := res.Verdict == VerdictUnsafe || res.BlockedSeconds > unsafeThresholdSeconds
 	if !res.Contention.Enabled || !claimsSafe || !froze {
@@ -1440,6 +1492,19 @@ func baseNote(res *RunResult, as *Assessment, mon monitor.Report) string {
 		return fmt.Sprintf("Measured with contention: Brace held a transaction open on the load target for %.1fs at a "+
 			"time while the migration ran, and writes still kept flowing. That is the acquisition risk tested rather "+
 			"than assumed away — the strongest green light this rig can give.", res.Contention.HoldSeconds)
+	case res.Verdict == VerdictSafe && !as.Lesson.BlocksWrites && res.Casualties.Total == 0 &&
+		res.BlockedSeconds > scaleFloorSeconds && len(mon.LockModes) > 0 &&
+		!migrationHeldWriteBlockingLock(as, mon):
+		// The write rate dipped, but the monitor confirms the migration held only a
+		// non-write-blocking lock — the CREATE INDEX CONCURRENTLY / VACUUM case. The
+		// dip is I/O and CPU contention on a shared box, not a lock freeze, so the
+		// verdict stays SAFE and no freeze is projected. Say so, honestly, and name
+		// the lock the monitor actually saw.
+		return fmt.Sprintf("The write rate dipped while the statement ran, but the monitor never saw a write-blocking "+
+			"lock: the migration held only %s, which does not conflict with the ROW EXCLUSIVE lock every INSERT, UPDATE "+
+			"and DELETE takes. That dip is I/O and CPU contention from the build competing for the disk on a shared box, "+
+			"not a lock freeze — writes kept committing and nobody was blocked. On a bigger table the same non-blocking "+
+			"lock is simply held for longer, so there is no freeze to project.", mon.StrongestLockMode)
 	case res.Verdict == VerdictUnsafe && !as.Lesson.BlocksWrites:
 		return "This statement blocked writes even though its shape usually does not. Worth reading the timeline " +
 			"rather than trusting the pattern."

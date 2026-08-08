@@ -707,6 +707,47 @@ func TestRejectedStatementsAre400(t *testing.T) {
 	}
 }
 
+// TestAlreadySafeAccessExclusiveCarriesQualifier pins BUG A on the HTTP surface:
+// a metadata-only ADD COLUMN is answered already_safe WITHOUT running, but it
+// still takes ACCESS EXCLUSIVE, so its acquisition wait is a real production risk
+// that was never simulated. The 400 body must carry qualifier
+// "acquisition_not_simulated" and a note pointing at hostile mode — otherwise a
+// caller reads the already_safe as an unconditional clean SAFE. A harmless shape
+// (ANALYZE) must NOT carry the qualifier.
+func TestAlreadySafeAccessExclusiveCarriesQualifier(t *testing.T) {
+	l := newLab(t, "acqqual", 1)
+
+	code, body := l.run(t, "ALTER TABLE orders ADD COLUMN promo int", "")
+	if code != http.StatusBadRequest {
+		t.Fatalf("ADD COLUMN = %d, want 400: %v", code, body)
+	}
+	if body["kind"] != string(engine.RejectAlreadySafe) {
+		t.Fatalf("kind = %v, want already_safe: %v", body["kind"], body)
+	}
+	if body["qualifier"] != engine.QualifierAcquisitionNotSimulated {
+		t.Errorf("qualifier = %v, want %q — an ACCESS EXCLUSIVE already_safe shape must flag the untested wait",
+			body["qualifier"], engine.QualifierAcquisitionNotSimulated)
+	}
+	note := fmt.Sprint(body["note"])
+	if note == "" || note == "<nil>" {
+		t.Fatalf("no note on an ACCESS EXCLUSIVE already_safe shape: %v", body)
+	}
+	for _, want := range []string{"ACCESS EXCLUSIVE", "hostile"} {
+		if !strings.Contains(note, want) {
+			t.Errorf("note missing %q:\n%s", want, note)
+		}
+	}
+
+	// The control: ANALYZE blocks nobody, so no acquisition qualifier.
+	code, body = l.run(t, "ANALYZE orders", "")
+	if code != http.StatusBadRequest || body["kind"] != string(engine.RejectAlreadySafe) {
+		t.Fatalf("ANALYZE = %d kind=%v, want 400 already_safe", code, body["kind"])
+	}
+	if _, ok := body["qualifier"]; ok {
+		t.Errorf("ANALYZE carried a qualifier %v; a harmless shape has no acquisition wait", body["qualifier"])
+	}
+}
+
 func TestSecondRunDuringARunIs409(t *testing.T) {
 	l := newLab(t, "busy", 1)
 

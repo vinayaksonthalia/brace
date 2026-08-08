@@ -136,6 +136,18 @@ type scaleInputs struct {
 	// must not manufacture one by projecting the resolution floor itself — that
 	// would be a false-UNSAFE on a statement that did no measurable work.
 	ScaleUncertain bool
+	// HeldWriteBlockingLock is the MONITOR's empirical answer to "did the
+	// migration actually hold a lock that conflicts with writes on a pre-existing
+	// relation?". It is what turns a measured write-rate dip into a scalable
+	// write-freeze: a dip under a NON-write-blocking lock (CREATE INDEX
+	// CONCURRENTLY's SHARE UPDATE EXCLUSIVE, VACUUM) is I/O/CPU contention on a
+	// shared box, not a freeze, so scaling it onto a bigger table would
+	// manufacture a phantom outage the lock physics cannot produce. Only the
+	// KNOWN-blocking scaling shapes (BlocksWrites && !ScaleUncertain — CREATE
+	// INDEX, SET NOT NULL, ALTER COLUMN TYPE) project from a floor measurement
+	// without needing this corroboration; every other shape's measured dip must be
+	// backed by an observed write-blocking lock before it is projected.
+	HeldWriteBlockingLock bool
 	// Verdict is the measured verdict, used to refuse projecting from a run that
 	// measured nothing.
 	Verdict string
@@ -184,16 +196,23 @@ func projectScale(in scaleInputs) ScaleProjection {
 	//   - the shape is KNOWN to do O(rows) work under a write-blocking lock, so
 	//     even a floor measurement is a defensible upper bound (CREATE INDEX, SET
 	//     NOT NULL, ALTER COLUMN TYPE); or
-	//   - the rehearsal actually MEASURED a freeze above the resolution floor,
-	//     which outranks any prediction — including on a non-blocking shape that
-	//     surprised us, and on a catch-all whose scaling we could not predict.
+	//   - the rehearsal MEASURED a freeze above the resolution floor AND the
+	//     monitor corroborated it with a write-blocking lock actually held. The
+	//     measurement outranks the shape prediction — a shape that took a stronger
+	//     lock than predicted, or a catch-all whose scaling we could not predict,
+	//     is projected — but a write-rate dip ON ITS OWN is not a freeze. Under a
+	//     NON-write-blocking lock (CREATE INDEX CONCURRENTLY's SHARE UPDATE
+	//     EXCLUSIVE, VACUUM) the dip is I/O/CPU contention on a shared box, and
+	//     scaling it would invent a phantom outage: the same non-blocking lock is
+	//     merely held for longer on a bigger table, freezing nobody at any size.
 	// A merely-uncertain scaling shape (ClassAlterTableOther / generic) that
 	// measured nothing above the floor gets NO projection: manufacturing a freeze
 	// from the 250ms floor there would be a false-UNSAFE on a statement that did no
 	// measurable work.
 	measuredFreeze := measured > scaleFloorSeconds
+	scalableMeasuredFreeze := measuredFreeze && in.HeldWriteBlockingLock
 	knownBlockingScale := in.BlocksWrites && !in.ScaleUncertain
-	if !knownBlockingScale && !measuredFreeze {
+	if !knownBlockingScale && !scalableMeasuredFreeze {
 		return p
 	}
 	if in.Verdict != VerdictSafe && in.Verdict != VerdictUnsafe {
@@ -215,6 +234,24 @@ func projectScale(in scaleInputs) ScaleProjection {
 	// scaled onto a bigger table. Judge it on the projected freeze alone.
 	p.Verdict = verdictFor(p.ProjectedBlockedSeconds, 0)
 	return p
+}
+
+// scaleProjectionFor is projectScale gated on the run having actually produced a
+// measurement. A run that ERRORED (the statement never executed — a bad column,
+// a permission error) or came back INCONCLUSIVE (the guard aborted it before it
+// finished) measured nothing, so there is no freeze to scale. Emitting a
+// projection struct populated with twin/target sizes and a model name for a
+// statement that never ran would dress a non-run as a measurement, which is
+// exactly the kind of measured-sounding output an errored run must not carry. For
+// those terminal states the projection is empty (Known() == false).
+func scaleProjectionFor(verdict string, in scaleInputs) ScaleProjection {
+	if verdict != VerdictSafe && verdict != VerdictUnsafe {
+		return ScaleProjection{}
+	}
+	// This is the single entry point, so make the verdict it was given
+	// authoritative for the projection too — the two can never disagree.
+	in.Verdict = verdict
+	return projectScale(in)
 }
 
 // effectiveVerdict is the verdict a CI gate should act on: the worse of what was

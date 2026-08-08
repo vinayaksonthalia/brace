@@ -197,6 +197,37 @@ func verdictFor(blockedSeconds float64, casualties int64) string {
 	return VerdictSafe
 }
 
+// verdictForObserved is verdictFor with the monitor's observed lock folded in as
+// the arbiter of whether a write-rate collapse was a LOCK freeze at all.
+//
+// The write-rate `blocked_seconds` is the primary signal that "the application
+// froze", but a collapsing write rate has two possible causes, and only one of
+// them is an outage the migration is responsible for:
+//
+//   - the migration held a lock that conflicts with writes (SHARE, SHARE ROW
+//     EXCLUSIVE, EXCLUSIVE, ACCESS EXCLUSIVE), so every INSERT/UPDATE/DELETE
+//     queued behind it — a real freeze; or
+//   - the migration held only a NON-write-blocking lock (ACCESS SHARE, ROW
+//     SHARE, ROW EXCLUSIVE, SHARE UPDATE EXCLUSIVE), and the dip is I/O or CPU
+//     contention from the work competing for the disk on a shared box. CREATE
+//     INDEX CONCURRENTLY's two heap scans are the canonical case: they cost
+//     throughput without ever blocking a writer.
+//
+// When no write-blocking lock was held, the write-rate dip is not a freeze and
+// must not flip the verdict to UNSAFE — a tool that cries UNSAFE at a genuinely
+// safe migration on measurement noise is broken. Real casualties (writes killed
+// waiting for a lock) are still honoured: they are dead writes, not a rate dip,
+// and cannot happen without something to wait for — so if any are counted they
+// remain grounds for UNSAFE.
+func verdictForObserved(blockedSeconds float64, casualties int64, heldWriteBlockingLock bool) string {
+	if !heldWriteBlockingLock {
+		// The dip, however deep, was not a lock freeze. Only dead writes can make
+		// this run UNSAFE now.
+		return verdictFor(0, casualties)
+	}
+	return verdictFor(blockedSeconds, casualties)
+}
+
 // roundSeconds trims to milliseconds. The extra digits are measurement noise
 // and printing them implies a precision we do not have.
 func roundSeconds(v float64) float64 {

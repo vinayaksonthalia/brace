@@ -164,13 +164,26 @@ const (
 )
 
 // RejectedError is the typed refusal. The API maps it to 400 with
-// {error:"rejected", kind, reason, suggestion}.
+// {error:"rejected", kind, reason, suggestion, qualifier, note}.
 type RejectedError struct {
 	Kind           RejectKind     `json:"kind"`
 	Code           string         `json:"code"`
 	Reason         string         `json:"reason"`
 	Suggestion     string         `json:"suggestion,omitempty"`
 	Classification Classification `json:"classification,omitempty"`
+	// Qualifier names what an already_safe answer did NOT establish. A
+	// metadata-only shape that still takes ACCESS EXCLUSIVE — ADD COLUMN with a
+	// constant default is the canonical one — is answered already_safe WITHOUT
+	// running, but that lock conflicts with every other mode including plain
+	// SELECT, so under a long-running transaction the change queues and every
+	// query behind it queues too. A flat rehearsal would never show that wait, and
+	// an unqualified SAFE would let a CI gate ship it as clean. Carrying
+	// acquisition_not_simulated here is what stops that. Empty for a genuinely
+	// harmless shape (COMMENT, ANALYZE) whose lock blocks nobody.
+	Qualifier string `json:"qualifier,omitempty"`
+	// Note is the one-line caveat that travels with Qualifier: what the untested
+	// risk is, and that hostile mode measures it.
+	Note string `json:"note,omitempty"`
 }
 
 func (e *RejectedError) Error() string { return "engine: rejected: " + e.Reason }
@@ -261,13 +274,31 @@ func Assess(sql string) (*Assessment, error) {
 	}
 
 	if lesson.TriviallySafe {
-		return as, &RejectedError{
+		rej := &RejectedError{
 			Kind:           RejectAlreadySafe,
 			Code:           string(class),
 			Reason:         lesson.Explanation,
 			Suggestion:     firstNonEmpty(lesson.Suggestion, "CREATE INDEX idx_orders_customer_id ON orders (customer_id);"),
 			Classification: class,
 		}
+		// An already_safe shape that still takes ACCESS EXCLUSIVE (metadata-only ADD
+		// COLUMN with a constant default) is safe about the WORK but not about the
+		// WAIT: on an idle table it gets the lock instantly, but in production it
+		// queues behind the longest open transaction and everything queues behind it.
+		// A default run does not simulate that, so the already_safe answer must carry
+		// the same acquisition_not_simulated qualifier a measured run would — never a
+		// bare, unconditional SAFE — and point the caller at hostile mode to measure
+		// the wait. A shape whose lock blocks nobody (COMMENT, ANALYZE) needs none of
+		// this.
+		if lesson.ExpectedLock == "AccessExclusiveLock" {
+			rej.Qualifier = QualifierAcquisitionNotSimulated
+			rej.Note = "This change is catalog-only, but it still takes ACCESS EXCLUSIVE, which conflicts with every " +
+				"other lock mode including plain SELECT. On an idle table it acquires that lock instantly; in production " +
+				"it waits behind your longest open transaction, and because PostgreSQL grants locks in arrival order, " +
+				"every query that arrives after it waits too — the table stops until that transaction ends. This run did " +
+				"not simulate that wait. Re-run with hostile mode (hostile: true, or BRACE_HOSTILE=on) to measure it."
+		}
+		return as, rej
 	}
 	return as, nil
 }

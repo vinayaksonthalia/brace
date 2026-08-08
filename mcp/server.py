@@ -83,12 +83,23 @@ def check_migration(
     body = r.json()
     if r.status_code == 400:
         if body.get("kind") == "already_safe":
-            return {
+            result = {
                 "effective_verdict": "SAFE",
                 "verdict": "SAFE",
                 "statically_safe": True,
                 "reason": body.get("reason"),
             }
+            # A metadata-only shape can still take ACCESS EXCLUSIVE (ADD COLUMN with a
+            # constant default). It is answered already_safe WITHOUT running, but its
+            # acquisition wait — behind a long-running transaction, every query queues
+            # behind it — was never simulated. Carry the qualifier + note through so an
+            # agent gating on `acquisition_not_simulated` does not read this as an
+            # unconditional clean SAFE and ship a change that freezes writes on acquire.
+            if body.get("qualifier"):
+                result["qualifier"] = body["qualifier"]
+            if body.get("note"):
+                result["note"] = body["note"]
+            return result
         return {"verdict": "REJECTED", "reason": body.get("reason"), "suggestion": body.get("suggestion")}
     if r.status_code == 409:
         return {"verdict": "BUSY", "reason": "another crash test is running; retry shortly"}
@@ -103,7 +114,7 @@ def check_migration(
         stats = requests.get(f"{API}/api/stats", timeout=15).json()
         lr = stats.get("last_run")
         if lr and lr.get("run_id") == run_id:
-            return {
+            result = {
                 k: lr.get(k)
                 for k in (
                     # effective_verdict comes first because it is the one to gate
@@ -122,6 +133,17 @@ def check_migration(
                     "qualifier", "note", "contention",
                 )
             }
+            # A run that ERRORED (the statement never executed) or came back
+            # INCONCLUSIVE (aborted before it finished) measured nothing. It must not
+            # carry a scale_projection or a scale_warning — those would be a
+            # measured-sounding claim about a statement that never ran. The engine
+            # already frames the explanation as "general behaviour, not a measurement";
+            # drop the projection fields here so nothing downstream reads them as real.
+            if result.get("verdict") in ("ERRORED", "INCONCLUSIVE") or \
+                    result.get("effective_verdict") in ("ERRORED", "INCONCLUSIVE"):
+                result.pop("scale_projection", None)
+                result.pop("scale_warning", None)
+            return result
     return {"verdict": "TIMEOUT", "reason": f"crash test still running after {wait_seconds}s"}
 
 

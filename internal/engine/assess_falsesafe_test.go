@@ -2,6 +2,7 @@ package engine
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -67,6 +68,72 @@ func TestNoDangerousStatementIsCalledSafe(t *testing.T) {
 			}
 			if as.Lesson.BlocksWrites != true {
 				t.Errorf("%q classified as not blocking writes (class %s) — expected a blocking shape", sql, as.Classification)
+			}
+		})
+	}
+}
+
+// TestAlreadySafeAccessExclusiveCarriesAcquisitionQualifier pins BUG A: an
+// already_safe shape that still takes ACCESS EXCLUSIVE (metadata-only ADD COLUMN
+// with a constant default) is safe about the WORK but not about the WAIT. It gets
+// the lock instantly on an idle twin, but in production it queues behind the
+// longest open transaction and everything queues behind it. The already_safe
+// rejection must therefore carry qualifier "acquisition_not_simulated" and a note
+// pointing at hostile mode — an unqualified SAFE would let a CI gate ship a change
+// that freezes writes the moment it queues. A shape whose lock blocks nobody
+// (COMMENT, ANALYZE) must NOT carry the qualifier.
+func TestAlreadySafeAccessExclusiveCarriesAcquisitionQualifier(t *testing.T) {
+	accessExclusive := []string{
+		`ALTER TABLE orders ADD COLUMN promo int`,
+		`ALTER TABLE orders ADD COLUMN notes text`,
+		`ALTER TABLE orders ADD COLUMN status text DEFAULT 'new'`,
+		`ALTER TABLE orders ADD COLUMN n int NOT NULL DEFAULT 0`,
+	}
+	for _, sql := range accessExclusive {
+		t.Run("access_exclusive/"+sql[:min(len(sql), 48)], func(t *testing.T) {
+			_, err := Assess(sql)
+			var rej *RejectedError
+			if !errors.As(err, &rej) || rej.Kind != RejectAlreadySafe {
+				t.Fatalf("Assess(%q) = %v, want an already_safe rejection", sql, err)
+			}
+			if rej.Classification != ClassAddColumnConstDefault {
+				t.Fatalf("classification = %q, want %q", rej.Classification, ClassAddColumnConstDefault)
+			}
+			// The heart of the fix: never a bare, unconditional SAFE.
+			if rej.Qualifier != QualifierAcquisitionNotSimulated {
+				t.Errorf("qualifier = %q, want %q — an ACCESS EXCLUSIVE already_safe shape must flag the untested wait",
+					rej.Qualifier, QualifierAcquisitionNotSimulated)
+			}
+			if rej.Note == "" {
+				t.Error("no note: the caller must be told the acquisition wait was not simulated")
+			}
+			for _, want := range []string{"ACCESS EXCLUSIVE", "hostile"} {
+				if !strings.Contains(rej.Note, want) {
+					t.Errorf("note missing %q:\n%s", want, rej.Note)
+				}
+			}
+		})
+	}
+
+	// The control: a shape whose lock blocks nobody must NOT carry the qualifier —
+	// there is no acquisition freeze to warn about.
+	harmless := []string{
+		`ANALYZE orders`,
+		`COMMENT ON TABLE orders IS 'the orders table'`,
+	}
+	for _, sql := range harmless {
+		t.Run("harmless/"+sql[:min(len(sql), 48)], func(t *testing.T) {
+			_, err := Assess(sql)
+			var rej *RejectedError
+			if !errors.As(err, &rej) || rej.Kind != RejectAlreadySafe {
+				t.Fatalf("Assess(%q) = %v, want an already_safe rejection", sql, err)
+			}
+			if rej.Qualifier != "" {
+				t.Errorf("qualifier = %q on a non-ACCESS-EXCLUSIVE shape; want none (lock %q)",
+					rej.Qualifier, rej.Classification)
+			}
+			if rej.Note != "" {
+				t.Errorf("note = %q on a harmless shape; want none", rej.Note)
 			}
 		})
 	}

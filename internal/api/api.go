@@ -897,6 +897,16 @@ func (s *Server) writeRunError(w http.ResponseWriter, err error) {
 		if rej.Classification != "" {
 			body["classification"] = string(rej.Classification)
 		}
+		// An already_safe shape that still takes ACCESS EXCLUSIVE carries these:
+		// the acquisition wait it did NOT simulate. Without them a caller reads the
+		// already_safe as an unconditional SAFE and ships a change that freezes
+		// writes the moment it queues behind a long transaction.
+		if rej.Qualifier != "" {
+			body["qualifier"] = rej.Qualifier
+		}
+		if rej.Note != "" {
+			body["note"] = rej.Note
+		}
 		writeJSON(w, http.StatusBadRequest, body)
 		return
 	}

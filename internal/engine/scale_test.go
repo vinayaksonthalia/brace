@@ -138,12 +138,36 @@ func TestProjectScale(t *testing.T) {
 			},
 		},
 		{
-			// ...unless we actually MEASURED a freeze. Measurement outranks
-			// prediction; that is the entire premise of the product.
-			name: "a surprise freeze on a non-blocking shape is projected anyway",
+			// The credibility bug this fix exists for: CREATE INDEX CONCURRENTLY held
+			// only SHARE UPDATE EXCLUSIVE (no write-blocking lock observed), and its
+			// two heap scans dipped the write rate below the threshold from I/O
+			// contention on a shared box — NOT a freeze. A dip on its own must not be
+			// scaled into a phantom outage: the same non-blocking lock is merely held
+			// for longer on a bigger table, freezing nobody at any size.
+			name: "a write-rate dip with no write-blocking lock is not projected (the CONCURRENTLY bug)",
+			in: scaleInputs{
+				Measured: 0.85, TwinRows: tenM, TargetRows: fiveHundredM,
+				ScalesWithRows: true, BlocksWrites: false, HeldWriteBlockingLock: false, Verdict: VerdictSafe,
+			},
+		},
+		{
+			// Even a large I/O dip that crossed the measured threshold is not scaled
+			// when no write-blocking lock was held — noise is noise at any magnitude.
+			name: "a large I/O dip with no write-blocking lock is still not projected",
+			in: scaleInputs{
+				Measured: 3, TwinRows: tenM, TargetRows: fiveHundredM,
+				ScalesWithRows: true, BlocksWrites: false, HeldWriteBlockingLock: false, Verdict: VerdictSafe,
+			},
+		},
+		{
+			// ...unless the monitor CORROBORATED the freeze with a write-blocking lock
+			// actually held. A shape predicted non-blocking that surprised us by taking
+			// a stronger lock is a genuine freeze — measurement outranks prediction,
+			// which is the entire premise of the product — so it IS projected.
+			name: "a surprise freeze corroborated by a write-blocking lock is projected",
 			in: scaleInputs{
 				Measured: 0.6, TwinRows: tenM, TargetRows: fiveHundredM,
-				ScalesWithRows: true, BlocksWrites: false, Verdict: VerdictSafe,
+				ScalesWithRows: true, BlocksWrites: false, HeldWriteBlockingLock: true, Verdict: VerdictSafe,
 			},
 			wantVerdict: VerdictUnsafe, wantProjected: 30,
 		},
@@ -174,14 +198,27 @@ func TestProjectScale(t *testing.T) {
 		},
 		{
 			// ...but if that same uncertain shape actually MEASURED a freeze above
-			// the floor, it rewrote — and a real measurement outranks the
-			// uncertainty, so it is projected.
+			// the floor AND the monitor saw a write-blocking lock (the rewrite's
+			// ACCESS EXCLUSIVE), a real measurement outranks the uncertainty, so it is
+			// projected.
 			name: "uncertain-scaling shape with a real measured freeze is projected",
 			in: scaleInputs{
 				Measured: 0.6, TwinRows: tenM, TargetRows: fiveHundredM,
-				ScalesWithRows: true, BlocksWrites: true, ScaleUncertain: true, Verdict: VerdictSafe,
+				ScalesWithRows: true, BlocksWrites: true, ScaleUncertain: true,
+				HeldWriteBlockingLock: true, Verdict: VerdictSafe,
 			},
 			wantVerdict: VerdictUnsafe, wantProjected: 30,
+		},
+		{
+			// The same uncertain shape whose dip was I/O contention (no write-blocking
+			// lock observed) must NOT be projected — this is the ClassAlterTableOther
+			// / generic analogue of the CONCURRENTLY bug.
+			name: "uncertain-scaling shape with an I/O dip and no write-blocking lock is not projected",
+			in: scaleInputs{
+				Measured: 0.6, TwinRows: tenM, TargetRows: fiveHundredM,
+				ScalesWithRows: true, BlocksWrites: true, ScaleUncertain: true,
+				HeldWriteBlockingLock: false, Verdict: VerdictSafe,
+			},
 		},
 	}
 
