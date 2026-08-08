@@ -429,6 +429,13 @@ a.card:hover .card__go{ color:var(--amber); transform:translateX(3px); }
 .dg-no{ fill:var(--amber); font-family:var(--mono); font-weight:600; }
 .dg-t--red{ fill:var(--red); font-family:var(--mono); font-weight:600; }
 .dg-t--green{ fill:var(--green); font-family:var(--mono); font-weight:600; }
+/* the numbered dots on the rehearsal spine */
+.dg-spine-dot{ fill:var(--panel-2); stroke:var(--edge-hot); stroke-width:1.2; }
+.dg-spine-dot--accent{ fill:var(--amber-wash); stroke:var(--amber-dim); }
+.dg-spine-dot--crash{ fill:var(--tint-red); stroke:var(--crash-edge); }
+/* a vertical flow (the rehearsal pipeline) reads best centred and not stretched
+   the full text column — cap it so desktop stays calm and mobile fills cleanly */
+.dg-frame--cap{ max-width:500px; margin-inline:auto; }
 
 /* ═══ SCREENSHOTS — real product captures, framed ══════════════
    The captures are dark-mode. A fixed dark mat + border frames them

@@ -271,51 +271,62 @@ zcli push --serviceId &lt;web-id&gt; --setup web --workingDir ./web</pre>
       <p>One run is a fixed pipeline. Every stage happens on the disposable twin, and the whole thing takes about ten seconds:</p>
 
       <figure class="diagram" aria-labelledby="dg-flow-t">
-        <div class="dg-frame">
-        <svg viewBox="0 0 680 566" role="img" aria-labelledby="dg-flow-t dg-flow-d">
+        <div class="dg-frame dg-frame--cap">
+        <svg viewBox="0 0 468 560" role="img" aria-labelledby="dg-flow-t dg-flow-d">
           <title id="dg-flow-t">How one rehearsal runs, step by step</title>
           <desc id="dg-flow-d">Paste the migration; clone a throwaway twin from the 10M-row template; start live labeled write traffic with 24 workers under a 1.5 second lock timeout; run the migration under that load; measure the freeze two independent ways — write-rate collapse and pg_locks sampled every 250 milliseconds; produce a verdict with casualties counted by label; then drop the twin.</desc>
-          <!-- connectors first (behind nodes) -->
+          <!-- a continuous spine the numbered steps sit on -->
+          <line class="dg-flow" x1="42" y1="36" x2="42" y2="516" stroke-width="1.2"/>
+          <!-- connectors (arrowheads into each following node) -->
           <g>
-            <line class="dg-flow" x1="340" y1="62" x2="340" y2="90"/><polygon class="dg-arrow" points="340,90 336,82 344,82"/>
-            <line class="dg-flow" x1="340" y1="142" x2="340" y2="170"/><polygon class="dg-arrow" points="340,170 336,162 344,162"/>
-            <line class="dg-flow" x1="340" y1="222" x2="340" y2="250"/><polygon class="dg-arrow" points="340,250 336,242 344,242"/>
-            <line class="dg-flow" x1="340" y1="302" x2="340" y2="330"/><polygon class="dg-arrow" points="340,330 336,322 344,322"/>
-            <line class="dg-flow" x1="340" y1="382" x2="340" y2="410"/><polygon class="dg-arrow" points="340,410 336,402 344,402"/>
-            <line class="dg-flow dg-flow--red" x1="340" y1="462" x2="340" y2="490"/><polygon class="dg-arrow dg-arrow--red" points="340,490 336,482 344,482"/>
+            <polygon class="dg-arrow" points="42,90 38,80 46,80"/>
+            <polygon class="dg-arrow" points="42,170 38,160 46,160"/>
+            <polygon class="dg-arrow" points="42,250 38,240 46,240"/>
+            <polygon class="dg-arrow" points="42,330 38,320 46,320"/>
+            <polygon class="dg-arrow" points="42,410 38,400 46,400"/>
+            <polygon class="dg-arrow dg-arrow--red" points="42,490 38,480 46,480"/>
           </g>
+          <!-- red spine segment into the drop step -->
+          <line class="dg-flow dg-flow--red" x1="42" y1="462" x2="42" y2="486"/>
           <!-- node 1 -->
-          <rect class="dg-node" x="150" y="10" width="380" height="52" rx="8"/>
-          <text class="dg-no" x="172" y="41" font-size="12">01</text>
-          <text class="dg-t" x="200" y="41" font-size="14">Paste the migration</text>
+          <circle class="dg-spine-dot" cx="42" cy="36" r="14"/>
+          <text class="dg-no" x="42" y="40" text-anchor="middle" font-size="12">01</text>
+          <rect class="dg-node" x="72" y="10" width="386" height="52" rx="8"/>
+          <text class="dg-t" x="92" y="41" font-size="14.5">Paste the migration</text>
           <!-- node 2 -->
-          <rect class="dg-node" x="150" y="90" width="380" height="52" rx="8"/>
-          <text class="dg-no" x="172" y="114" font-size="12">02</text>
-          <text class="dg-t" x="200" y="114" font-size="14">Clone a throwaway twin</text>
-          <text class="dg-t--mono" x="200" y="131" font-size="10.5">from brace_template · 10M rows</text>
+          <circle class="dg-spine-dot" cx="42" cy="116" r="14"/>
+          <text class="dg-no" x="42" y="120" text-anchor="middle" font-size="12">02</text>
+          <rect class="dg-node" x="72" y="90" width="386" height="52" rx="8"/>
+          <text class="dg-t" x="92" y="113" font-size="14.5">Clone a throwaway twin</text>
+          <text class="dg-t--mono" x="92" y="131" font-size="11">from brace_template · 10M rows</text>
           <!-- node 3 -->
-          <rect class="dg-node" x="150" y="170" width="380" height="52" rx="8"/>
-          <text class="dg-no" x="172" y="194" font-size="12">03</text>
-          <text class="dg-t" x="200" y="194" font-size="14">Start live write traffic</text>
-          <text class="dg-t--mono" x="200" y="211" font-size="10.5">24 workers · lock_timeout 1.5s · labeled</text>
-          <!-- node 4 -->
-          <rect class="dg-node dg-node--accent" x="150" y="250" width="380" height="52" rx="8"/>
-          <text class="dg-no" x="172" y="281" font-size="12">04</text>
-          <text class="dg-t" x="200" y="281" font-size="14">Run the migration under load</text>
+          <circle class="dg-spine-dot" cx="42" cy="196" r="14"/>
+          <text class="dg-no" x="42" y="200" text-anchor="middle" font-size="12">03</text>
+          <rect class="dg-node" x="72" y="170" width="386" height="52" rx="8"/>
+          <text class="dg-t" x="92" y="193" font-size="14.5">Start live write traffic</text>
+          <text class="dg-t--mono" x="92" y="211" font-size="11">24 workers · lock_timeout 1.5s · labeled</text>
+          <!-- node 4 — the migration under test -->
+          <circle class="dg-spine-dot dg-spine-dot--accent" cx="42" cy="276" r="14"/>
+          <text class="dg-no" x="42" y="280" text-anchor="middle" font-size="12">04</text>
+          <rect class="dg-node dg-node--accent" x="72" y="250" width="386" height="52" rx="8"/>
+          <text class="dg-t" x="92" y="281" font-size="14.5">Run the migration under load</text>
           <!-- node 5 -->
-          <rect class="dg-node" x="150" y="330" width="380" height="52" rx="8"/>
-          <text class="dg-no" x="172" y="354" font-size="12">05</text>
-          <text class="dg-t" x="200" y="354" font-size="14">Measure two independent ways</text>
-          <text class="dg-t--mono" x="200" y="371" font-size="10.5">write-rate collapse + pg_locks @250ms</text>
+          <circle class="dg-spine-dot" cx="42" cy="356" r="14"/>
+          <text class="dg-no" x="42" y="360" text-anchor="middle" font-size="12">05</text>
+          <rect class="dg-node" x="72" y="330" width="386" height="52" rx="8"/>
+          <text class="dg-t" x="92" y="353" font-size="14.5">Measure two independent ways</text>
+          <text class="dg-t--mono" x="92" y="371" font-size="11">write-rate collapse + pg_locks @250ms</text>
           <!-- node 6 -->
-          <rect class="dg-node" x="150" y="410" width="380" height="52" rx="8"/>
-          <text class="dg-no" x="172" y="434" font-size="12">06</text>
-          <text class="dg-t" x="200" y="434" font-size="14">Verdict + casualties by label</text>
-          <text class="dg-t--mono" x="200" y="451" font-size="10.5">SAFE / UNSAFE · 55P03 count</text>
-          <!-- node 7 -->
-          <rect class="dg-node dg-node--crash" x="150" y="490" width="380" height="52" rx="8"/>
-          <text class="dg-t--red" x="172" y="521" font-size="12">✕</text>
-          <text class="dg-t" x="200" y="521" font-size="14">Twin dropped — nothing real touched</text>
+          <circle class="dg-spine-dot" cx="42" cy="436" r="14"/>
+          <text class="dg-no" x="42" y="440" text-anchor="middle" font-size="12">06</text>
+          <rect class="dg-node" x="72" y="410" width="386" height="52" rx="8"/>
+          <text class="dg-t" x="92" y="433" font-size="14.5">Verdict + casualties by label</text>
+          <text class="dg-t--mono" x="92" y="451" font-size="11">SAFE / UNSAFE · 55P03 count</text>
+          <!-- node 7 — drop -->
+          <circle class="dg-spine-dot dg-spine-dot--crash" cx="42" cy="516" r="14"/>
+          <text class="dg-t--red" x="42" y="521" text-anchor="middle" font-size="13">✕</text>
+          <rect class="dg-node dg-node--crash" x="72" y="490" width="386" height="52" rx="8"/>
+          <text class="dg-t" x="92" y="521" font-size="14.5">Twin dropped — nothing real touched</text>
         </svg>
         </div>
         <figcaption>Seven stages, all on a throwaway copy. The verdict is a counted fact, not a static guess.</figcaption>
@@ -367,7 +378,6 @@ zcli push --serviceId &lt;web-id&gt; --setup web --workingDir ./web</pre>
           <!-- left: writers blocked -->
           <rect class="dg-node dg-node--crash" x="30" y="120" width="290" height="98" rx="8"/>
           <text class="dg-t" x="50" y="146" font-size="13">Writers — ROW EXCLUSIVE</text>
-          <text class="dg-t--red" x="50" y="146" font-size="13" opacity="0"> </text>
           <text class="dg-t--mono" x="50" y="167" font-size="10.5" style="fill:var(--ink-2)">INSERT · UPDATE · DELETE</text>
           <text class="dg-t--red" x="50" y="192" font-size="12">CONFLICTS → queue</text>
           <text class="dg-t--mono" x="50" y="209" font-size="10.5" style="fill:var(--ink-2)">die at lock_timeout · 55P03</text>
@@ -528,19 +538,70 @@ brace-check -target-rows 500000000 -f migration.sql</pre>
     <section class="doc-sec reveal" id="mcp" data-title="MCP verb">
       <p class="eyebrow">Using it · agents</p>
       <h2>The MCP verb an agent calls.</h2>
-      <p>A local AI assistant — Claude Code, Cursor, or any MCP client — can call Brace directly. An agent that writes a migration in seconds should be able to ask "will this hurt?" in the same breath, against a real production-scale rehearsal rather than a linter's guess. Run <code>mcp/server.py</code> (FastMCP, over stdio) and expose one verb:</p>
+      <p>A local AI assistant — Claude Code, Cursor, or any MCP client — can call Brace directly. An agent that writes a migration in seconds should be able to ask "will this hurt?" in the same breath, against a real production-scale rehearsal rather than a linter's guess. Run <code>mcp/server.py</code> (FastMCP, over stdio) and it exposes three tools: <code>check_migration</code> to rehearse a statement, <code>get_result</code> to fetch a rehearsal too slow to finish inline, and <code>lab_status</code> to read the warm-twin pool.</p>
 
       <div class="doc-code">
         <div class="doc-code__cap"><b>the verb an agent calls</b></div>
 <pre>check_migration(sql, target_rows=0, hostile=false)
 <span class="c"># returns JSON the agent can branch on:</span>
-<span class="c">#   effective_verdict  → "SAFE" | "UNSAFE"  (measured or projected, worst-of)</span>
-<span class="c">#   qualifier          → e.g. acquisition_not_simulated</span>
-<span class="c">#   note               → the plain-English explanation</span>
+<span class="c">#   effective_verdict  → gate on THIS: worst-of measured + projected</span>
+<span class="c">#   verdict            → what was measured on the twin alone</span>
+<span class="c">#   blocked_seconds    → how long writes froze</span>
+<span class="c">#   casualties         → real writes killed, broken out by label</span>
+<span class="c">#   suggestion         → the safe rewrite, on an UNSAFE verdict</span>
+<span class="c">#   qualifier / note   → what this run did NOT establish, in words</span>
 <span class="c">#   contention         → whether hostile mode's hold actually engaged</span>
 <span class="c"># — so the agent can refuse to ship a locking migration.</span></pre>
       </div>
-      <p>It returns the same verdict, casualties and suggested rewrite the web lab shows — as JSON — so a coding agent can gate its own output the way CI gates a human's.</p>
+      <p>It returns the same verdict, casualties and suggested rewrite the web lab shows — as JSON — so a coding agent can gate its own output the way CI gates a human's. Always branch on <code>effective_verdict</code>, never on <code>verdict</code>: <code>verdict</code> is only what the twin measured, while <code>effective_verdict</code> also folds in the projection onto your real <code>target_rows</code>, so a change can read <code>SAFE</code> on the twin and <code>UNSAFE</code> at your scale.</p>
+
+      <h3>Slow migrations: PENDING, then get_result</h3>
+      <p>A real migration can outlive the client's tool timeout. <code>CREATE INDEX CONCURRENTLY</code>, table rewrites and <code>ALTER COLUMN … TYPE</code> routinely run 40–90&nbsp;seconds, longer than the ~60&nbsp;s budget most MCP clients allow. So <code>check_migration</code> never holds the call open past its <code>wait_seconds</code> (default 45): when the rehearsal is still running at the deadline it returns a <em>recoverable</em> status rather than losing the run —</p>
+      <div class="doc-code">
+        <div class="doc-code__cap"><b>the async flow — a slow rehearsal is never lost</b></div>
+<pre>result = check_migration(sql)
+<span class="c"># slow run still going at the deadline:</span>
+<span class="c">#   { "verdict": "PENDING", "run_id": "…", "next": "call get_result(run_id) …" }</span>
+
+<span class="c"># the run is NOT lost — poll for the finished verdict with its run_id:</span>
+result = get_result(run_id)
+<span class="c"># returns the SAME rich shape check_migration returns —</span>
+<span class="c"># effective_verdict, blocked_seconds, casualties, suggestion, … —</span>
+<span class="c"># or PENDING again if it is still in flight (poll once more).</span></pre>
+      </div>
+      <p>This is the answer to <em>"how do I test a slow migration?"</em>: on <code>PENDING</code>, call <code>get_result(run_id)</code> a few seconds later. Runs are serialised, so the run you just submitted is the one the lab is holding as its most-recent result — poll promptly, because a newer run supersedes the rich result it can hand back.</p>
+
+      <h3>The verdict enum a strict gate can see</h3>
+      <p>Every value <code>check_migration</code> and <code>get_result</code> can put in the top-level <code>verdict</code> / <code>effective_verdict</code> / <code>status</code> fields, so an agent author knows exactly what to branch on and is never surprised by an undocumented one. Nothing here is a raw HTTP error — the server maps each one to a named, typed status.</p>
+      <div class="doc-tablewrap">
+        <table class="doc-table">
+          <thead><tr><th>Status</th><th>Meaning · what to do</th></tr></thead>
+          <tbody>
+            <tr><td><code>SAFE</code></td><td>Writes kept flowing; safe at the tested size. <em>Still read <code>effective_verdict</code></em> — the projection can escalate it.</td></tr>
+            <tr><td><code>UNSAFE</code></td><td>Writes froze &gt;1&nbsp;s and/or real writes died. Block the deploy; the safe rewrite is in <code>suggestion</code>.</td></tr>
+            <tr><td><code>INCONCLUSIVE</code></td><td>Aborted before it could finish (e.g. never acquired its lock in budget). Not a pass.</td></tr>
+            <tr><td><code>ERRORED</code></td><td>The statement could not execute at all (bad SQL, permission denied, a run that failed before measurement). Never safe.</td></tr>
+            <tr><td><code>SAFE</code> · <code>statically_safe</code></td><td>The <em>already_safe</em> fast path: a catalog-only shape (<code>ADD COLUMN</code> with a constant default, <code>ANALYZE</code>, <code>COMMENT</code>) proven safe by shape without a run. If it still takes <code>ACCESS EXCLUSIVE</code> it carries <code>qualifier: "acquisition_not_simulated"</code> — its acquisition wait was not simulated; re-run with <code>hostile=true</code>.</td></tr>
+            <tr><td><code>REJECTED</code></td><td>The lab will not run this statement (not a migration, multi-statement, too long, or a target relation that does not exist). See <code>reason</code> / <code>suggestion</code>. Treat as not-safe.</td></tr>
+            <tr><td><code>RATE_LIMITED</code></td><td>Too many runs — a graceful 429, never a raw HTTP error. Retry after <code>retry_after_seconds</code>.</td></tr>
+            <tr><td><code>BUSY</code></td><td>Another crash test is in progress; retry shortly.</td></tr>
+            <tr><td><code>WARMING</code></td><td>No warm twin yet; retry after the ETA in <code>reason</code>.</td></tr>
+            <tr><td><code>PENDING</code></td><td>The run did not finish within <code>wait_seconds</code> but was <strong>not</strong> lost. Carries <code>run_id</code>; call <code>get_result(run_id)</code>.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>The four measured/derived outcomes (<code>SAFE</code>, <code>UNSAFE</code>, <code>INCONCLUSIVE</code>, <code>ERRORED</code>) can appear in both <code>effective_verdict</code> and <code>verdict</code>; the submission and transport statuses (<code>REJECTED</code>, <code>RATE_LIMITED</code>, <code>BUSY</code>, <code>WARMING</code>, <code>PENDING</code>) are never a measurement and appear in <code>verdict</code> only. A gate that treats everything except a clean <code>SAFE</code> as "do not ship" is correct.</p>
+
+      <h3>A statement against a table the lab doesn't have</h3>
+      <p>The public lab carries one synthetic table — <code>orders</code>. A statement whose target relation isn't there is <strong>not</strong> blessed <code>SAFE</code>: a metadata-only shape that would otherwise fast-path to a clean pass comes back <code>REJECTED</code> instead, naming the missing relation and listing the tables the lab actually has —</p>
+      <div class="doc-code">
+        <div class="doc-code__cap"><b>REJECTED — nothing to rehearse, so nothing to bless</b></div>
+<pre>check_migration("DROP INDEX idx_users_email")
+<span class="c">{ "verdict": "REJECTED",</span>
+<span class="c">  "reason": "Relation \"users\" does not exist in the lab … The lab's tables are: orders.",</span>
+<span class="c">  "suggestion": "Target one of the lab's tables: orders." }</span></pre>
+      </div>
+      <p>That is exactly why rehearsing <em>your</em> schema means self-hosting: point <code>BRACE_API</code> at your own instance, restore your dump as the template, and the same tools now crash-test against <em>your</em> tables. See <a href="#byod">Bring your own data</a>.</p>
 
       <h3>Connect it to your agent</h3>
       <p>The fastest path needs <b>nothing installed</b> — Brace runs a hosted MCP endpoint on Zerops. Any MCP-capable agent (Claude Code, Cursor, Windsurf, Cline, Codex) connects by URL:</p>
@@ -563,6 +624,7 @@ args = ["-y", "mcp-remote", "https://mcp-2a61-8080.prg1.zerops.app/mcp"]</pre>
 claude mcp add brace -- "$PWD/mcp/.venv/bin/python" "$PWD/mcp/server.py"
 <span class="c"># BRACE_API defaults to the public lab; set it to your own instance to use your data</span></pre>
       </div>
+      <p>Every transport exposes the same three tools — <code>check_migration</code>, <code>get_result</code> and <code>lab_status</code> — so an agent gets the async slow-migration recovery path above whether it connects by URL, through the <code>mcp-remote</code> bridge, or over local stdio.</p>
       <p>Then just ask your agent: <em>"use brace to check <code>CREATE INDEX idx_orders_email ON orders (email)</code> before I ship it — with hostile mode on."</em> It runs a real rehearsal and refuses to ship an outage.</p>
     </section>
 
@@ -670,7 +732,7 @@ pg_restore -U &lt;superuser&gt; -d brace_template your-dump.dump</pre>
       <div class="api">
         <div class="api-row">
           <div class="api-sig"><span class="api-verb api-verb--post">post</span><span class="api-path">/api/run</span></div>
-          <p class="api-desc">Rehearse one migration. Body: <code>{ sql, mode?, target_rows?, hostile? }</code>. A run takes about ten seconds, so the call does not hold the request open: it returns <code>202 { run_id }</code> on admission, or a <code>4xx</code> / <code>503</code> with a reason when the statement is rejected or no twin is warm yet. The completed report card is read back from <code>GET /api/stats</code> as <code>last_run</code>, and pushed live over the SSE stream.</p>
+          <p class="api-desc">Rehearse one migration. Body: <code>{ sql, mode?, target_rows?, hostile? }</code>. A run takes about ten seconds, so the call does not hold the request open: it returns <code>202 { run_id }</code> on admission, then the completed report card is read back from <code>GET /api/stats</code> as <code>last_run</code> and pushed live over the SSE stream. Everything else is a typed rejection with a <code>reason</code> — no raw or unexplained errors (see the status map below). A statement whose target relation does not exist is <strong>rejected</strong>, never blessed <code>SAFE</code>.</p>
         </div>
         <div class="api-row">
           <div class="api-sig"><span class="api-verb api-verb--get">get</span><span class="api-path">/api/stats</span></div>
@@ -697,6 +759,24 @@ pg_restore -U &lt;superuser&gt; -d brace_template your-dump.dump</pre>
           <p class="api-desc">Liveness probe. Returns <code>ok</code> the moment the listener is up — deliberately dumber than readiness, so a platform can't kill the container mid-seed.</p>
         </div>
       </div>
+
+      <h3>How <code>POST /api/run</code> answers</h3>
+      <p>The MCP verb and the CLI are thin clients over this endpoint, and each status below is the HTTP form of a value in the <a href="#mcp">verdict enum</a>. Every 4xx carries a JSON <code>reason</code>; a rate-limit is a graceful <code>429</code> with <code>Retry-After</code>, never a raw error:</p>
+      <div class="doc-tablewrap">
+        <table class="doc-table">
+          <thead><tr><th>HTTP</th><th>Body</th><th>Maps to</th></tr></thead>
+          <tbody>
+            <tr><td class="num">202</td><td><code>{ run_id }</code> — admitted; read the result from <code>/api/stats</code></td><td><span class="pill pill--green">SAFE / UNSAFE / …</span></td></tr>
+            <tr><td class="num">400</td><td><code>{ error:"rejected", kind:"already_safe", reason }</code> — proven safe by shape, no run</td><td><span class="pill pill--green">SAFE · statically_safe</span></td></tr>
+            <tr><td class="num">400</td><td><code>{ error:"rejected", kind:"rejected", reason, suggestion? }</code> — not a migration, multi-statement, too long, or a <strong>nonexistent target relation</strong></td><td><span class="pill pill--red">REJECTED</span></td></tr>
+            <tr><td class="num">413</td><td><code>{ error:"rejected", reason }</code> — body over the size cap</td><td><span class="pill pill--red">REJECTED</span></td></tr>
+            <tr><td class="num">429</td><td><code>{ error:"rate_limited" }</code> + <code>Retry-After</code> header</td><td><span class="pill pill--amber">RATE_LIMITED</span></td></tr>
+            <tr><td class="num">409</td><td><code>{ error:"run_in_progress" }</code></td><td><span class="pill pill--amber">BUSY</span></td></tr>
+            <tr><td class="num">503</td><td><code>{ error:"no_warm_twin", eta_seconds }</code> · <code>{ error:"starting" }</code></td><td><span class="pill pill--amber">WARMING</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>On a nonexistent relation the <code>400 rejected</code> body names the missing relation and lists the lab's tables — the public lab has just <code>orders</code>, so <code>DROP INDEX</code> or an <code>ALTER TABLE</code> against your own <code>users</code> or <code>invoices</code> comes back rejected here. To crash-test against <em>your</em> schema, <a href="#byod">self-host and point <code>BRACE_API</code> at your instance</a>.</p>
     </section>
 
     <!-- ══ 11 · HONEST LIMITS ═══════════════════════════════════ -->

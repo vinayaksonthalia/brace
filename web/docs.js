@@ -123,7 +123,12 @@
   ].filter(Boolean);
 
   function filter(qRaw) {
-    var q = (qRaw || '').trim().toLowerCase();
+    // Normalise before matching: fold to lower case, drop everything that is
+    // not a letter, digit or space, then collapse runs of space. A stray "/"
+    // (or any punctuation-only input — the exact keystroke that used to nuke the
+    // whole nav) reduces to "" and is treated as no filter at all, so the nav is
+    // never hidden by a character that could not match a section label anyway.
+    var q = (qRaw || '').toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
     if (!side) return;
     if (!q) {
       side.classList.remove('is-filtered', 'no-match');
@@ -169,13 +174,25 @@
     });
   });
 
-  // press "/" to jump to the filter (unless already typing)
+  // press "/" to jump to the filter (unless already typing). preventDefault must
+  // fire BEFORE focus moves, so the "/" that triggered the shortcut is cancelled
+  // and never lands in the box (the keydown default — the character input — is
+  // what we cancel; moving focus afterwards cannot revive it). We also guard
+  // against modified chords ("/" under Ctrl/Meta/Alt is a browser shortcut, e.g.
+  // Quick Find — leave it alone) and only act on the bare key. Even if a stray
+  // "/" somehow reached the box, filter() now normalises it away, so the nav
+  // stays intact either way — this is belt-and-suspenders.
   document.addEventListener('keydown', function (e) {
-    if (e.key === '/' && !/^(INPUT|TEXTAREA)$/.test((e.target.tagName || '')) && inputs.length) {
-      e.preventDefault();
-      var visible = inputs.filter(function (i) { return i.offsetParent !== null; })[0] || inputs[0];
-      visible.focus();
-    }
+    if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey) return;
+    var tag = (e.target && e.target.tagName) || '';
+    if (/^(INPUT|TEXTAREA|SELECT)$/.test(tag) || (e.target && e.target.isContentEditable)) return;
+    if (!inputs.length) return;
+    e.preventDefault();
+    var visible = inputs.filter(function (i) { return i.offsetParent !== null; })[0] || inputs[0];
+    visible.focus();
+    // Some browsers place the caret without selecting; make a subsequent real
+    // keystroke replace nothing unexpected by putting the caret at the end.
+    try { var v = visible.value; visible.setSelectionRange(v.length, v.length); } catch (_) {}
   });
 
   // ── the mobile drawer ────────────────────────────────────────
