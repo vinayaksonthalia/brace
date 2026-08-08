@@ -341,6 +341,15 @@ type RunResult struct {
 	// table — see Qualifier.
 	Contention Contention `json:"contention"`
 
+	// Statements is the per-statement breakdown of a SEQUENCE run (see
+	// sequence.go). It is nil — and omitted — for the single-statement path,
+	// which is unchanged. When present, the top-level Verdict / EffectiveVerdict
+	// are the worst-of across the sequence and SQL is the joined script; each
+	// element carries one statement's own measured window (its freeze, its
+	// casualties, its lock modes), because a real migration is several statements
+	// run in order on ONE twin and each has its own story.
+	Statements []StatementResult `json:"statements,omitempty"`
+
 	// --- the evidence ---
 	BaselineWPS int64 `json:"baseline_writes_per_sec"`
 	// LockModes are the modes the migration was actually seen holding, from the

@@ -318,6 +318,20 @@ func (l *lab) run(t *testing.T, sql, mode string) (int, map[string]any) {
 	return resp.StatusCode, decoded
 }
 
+// runSeq posts a SEQUENCE run — the additive `statements` field on /api/run.
+func (l *lab) runSeq(t *testing.T, statements []string, mode string) (int, map[string]any) {
+	t.Helper()
+	body, _ := json.Marshal(map[string]any{"statements": statements, "mode": mode})
+	resp, err := http.Post(l.http.URL+"/api/run", "application/json", strings.NewReader(string(body)))
+	if err != nil {
+		t.Fatalf("POST /api/run (sequence): %v", err)
+	}
+	defer resp.Body.Close()
+	var decoded map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&decoded)
+	return resp.StatusCode, decoded
+}
+
 // ---------------------------------------------------------------- SSE client
 
 type sseEvent struct {
@@ -801,5 +815,69 @@ func TestRunIsRateLimitedEndToEnd(t *testing.T) {
 	_ = post()
 	if code := post(); code != http.StatusTooManyRequests {
 		t.Fatalf("third run in a burst = %d, want 429", code)
+	}
+}
+
+// TestSequenceRunEndToEnd exercises the additive `statements` field on /api/run:
+// a two-step dependent migration is accepted (202 + run_id), streamed to a
+// run_finished, and the finished event carries the per-statement array with each
+// step's own verdict — the second statement (CREATE INDEX on the just-added
+// column) does NOT error, because the sequence ran both on one twin.
+func TestSequenceRunEndToEnd(t *testing.T) {
+	l := newLab(t, "seq", 1)
+	c := openStream(t, l.http.URL)
+	c.waitFor(t, "stats", 5*time.Second)
+
+	code, body := l.runSeq(t, []string{
+		"ALTER TABLE orders ADD COLUMN promo int",
+		"CREATE INDEX idx_orders_promo ON orders (promo)",
+	}, "custom")
+	if code != http.StatusAccepted {
+		t.Fatalf("POST /api/run (sequence) = %d: %v", code, body)
+	}
+	runID, _ := body["run_id"].(string)
+	if runID == "" {
+		t.Fatalf("202 body has no run_id: %v", body)
+	}
+
+	finished := c.waitFor(t, "run_finished", 90*time.Second)
+	if finished.data["run_id"] != runID {
+		t.Fatalf("run_finished run_id = %v, want %s", finished.data["run_id"], runID)
+	}
+	verdict := fmt.Sprint(finished.data["verdict"])
+	if verdict != engine.VerdictSafe && verdict != engine.VerdictUnsafe {
+		t.Fatalf("overall verdict = %q, want SAFE or UNSAFE", verdict)
+	}
+	stmts, ok := finished.data["statements"].([]any)
+	if !ok || len(stmts) != 2 {
+		t.Fatalf("run_finished statements = %v, want a 2-element array", finished.data["statements"])
+	}
+	second, _ := stmts[1].(map[string]any)
+	if second == nil {
+		t.Fatalf("second statement result is not an object: %v", stmts[1])
+	}
+	if errStr := fmt.Sprint(second["error"]); errStr != "" && errStr != "<nil>" {
+		t.Fatalf("statement 2 (CREATE INDEX on the new column) errored over HTTP: %q", errStr)
+	}
+	if sv := fmt.Sprint(second["verdict"]); sv == engine.VerdictErrored || sv == "SKIPPED" {
+		t.Fatalf("statement 2 verdict = %q, want a measured verdict", sv)
+	}
+}
+
+// TestSequenceAndSchemaConflictIs400: statements and schema_ddl are mutually
+// exclusive, refused synchronously on the submitting request.
+func TestSequenceAndSchemaConflictIs400(t *testing.T) {
+	l := newLab(t, "seqconf", 1)
+	body, _ := json.Marshal(map[string]any{
+		"statements": []string{"ANALYZE orders"},
+		"schema_ddl": "CREATE TABLE t (id bigint)",
+	})
+	resp, err := http.Post(l.http.URL+"/api/run", "application/json", strings.NewReader(string(body)))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("statements+schema_ddl = %d, want 400", resp.StatusCode)
 	}
 }

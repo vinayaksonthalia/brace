@@ -629,6 +629,13 @@ func (s *Server) reportByID(ctx context.Context, id int64) (*engine.RunRecord, e
 type runRequest struct {
 	SQL  string `json:"sql"`
 	Mode string `json:"mode"`
+	// Statements, when non-empty, switches this run to SEQUENCE mode: the listed
+	// statements are run IN ORDER on ONE twin (a real migration is a file, not a
+	// single statement), each measured in its own window, so a later statement sees
+	// the schema the earlier ones produced. Every statement passes the SAME
+	// allow-list the single path uses — a sequence cannot smuggle a non-allow-listed
+	// verb. Empty leaves the single-statement flow completely untouched.
+	Statements []string `json:"statements,omitempty"`
 	// SchemaDDL, when non-empty, switches this run to bring-your-own-schema mode:
 	// Brace builds a disposable database from this single CREATE TABLE, seeds it,
 	// and rehearses SQL against it instead of the stock orders table. Empty leaves
@@ -745,16 +752,36 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	//
 	// A schema run pre-checks the pasted CREATE TABLE plus the migration; there is
 	// no warm-twin peek, because the target table lives in the disposable database
-	// the run is about to build.
+	// the run is about to build. A sequence run pre-checks every statement against
+	// the same allow-list; there is no existence peek, because a later statement may
+	// reference a relation an earlier one creates.
 	schemaMode := strings.TrimSpace(req.SchemaDDL) != ""
-	if schemaMode {
+	seqMode := len(req.Statements) > 0
+	if seqMode && schemaMode {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"error": "rejected",
+			"kind":  string(engine.RejectRejected),
+			"reason": "A run is either a single statement/sequence against the stock twin or a bring-your-own-schema run; " +
+				"pass statements or schema_ddl, not both.",
+		})
+		return
+	}
+	switch {
+	case seqMode:
+		if _, err := eng.AssessSequence(r.Context(), req.Statements, req.runOptions()...); err != nil {
+			s.writeRunError(w, err)
+			return
+		}
+	case schemaMode:
 		if _, err := eng.AssessSchemaRun(r.Context(), req.SchemaDDL, req.SQL, req.runOptions()...); err != nil {
 			s.writeRunError(w, err)
 			return
 		}
-	} else if _, err := eng.AssessRun(r.Context(), req.SQL, req.runOptions()...); err != nil {
-		s.writeRunError(w, err)
-		return
+	default:
+		if _, err := eng.AssessRun(r.Context(), req.SQL, req.runOptions()...); err != nil {
+			s.writeRunError(w, err)
+			return
+		}
 	}
 
 	s.dispatchMu.Lock()
@@ -785,20 +812,29 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	// with the request would leave a twin under load.
 	resCh := make(chan outcome, 1)
 	sql := req.SQL
+	if seqMode {
+		// The stream and the fallback show the whole script; the engine assigns the
+		// canonical joined SQL on the result either way.
+		sql = strings.Join(req.Statements, ";\n")
+	}
 	opts := req.runOptions()
 	schemaDDL := req.SchemaDDL
 	rowCount := req.RowCount
+	statements := req.Statements
 	go func() {
 		var res *engine.RunResult
 		var err error
-		if schemaMode {
+		switch {
+		case seqMode:
+			res, err = eng.RehearseSequence(s.runCtx, statements, mode, opts...)
+		case schemaMode:
 			res, err = eng.RehearseSchema(s.runCtx, engine.SchemaRequest{
 				SchemaDDL: schemaDDL,
 				RowCount:  rowCount,
 				SQL:       sql,
 				Mode:      mode,
 			}, opts...)
-		} else {
+		default:
 			res, err = eng.Rehearse(s.runCtx, sql, mode, opts...)
 		}
 		resCh <- outcome{res: res, err: err}

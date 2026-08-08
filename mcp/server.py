@@ -57,6 +57,11 @@ _RESULT_FIELDS = (
     # (contention). Without these an agent reads an unqualified SAFE for a shape
     # whose acquisition wait was never simulated.
     "qualifier", "note", "contention",
+    # The per-statement breakdown of a SEQUENCE run. Present only when the run was
+    # submitted with `statements=[...]`; each element carries that statement's own
+    # verdict/blocked_seconds/casualties/lock_modes/explanation, and the top-level
+    # verdict/effective_verdict are the worst-of across the sequence.
+    "statements",
 )
 
 # Default wait budgets are kept BELOW the ~60s tool timeout most MCP clients
@@ -147,8 +152,9 @@ def _pending(run_id: str, waited: int) -> dict:
 
 @mcp.tool
 def check_migration(
-    sql: str, target_rows: int = 0, hostile: bool = False,
-    schema_ddl: str = "", row_count: int = 0,
+    sql: str = "", target_rows: int = 0, hostile: bool = False,
+    schema_ddl: str = "", row_count: int = 0, deadline_ms: int = 0,
+    statements: list[str] | None = None,
     wait_seconds: int = _DEFAULT_WAIT_SECONDS,
 ) -> dict:
     """Crash-test a Postgres migration on a production-scale twin under live
@@ -196,6 +202,11 @@ def check_migration(
                       It still carries "qualifier"/"note" when it takes ACCESS
                       EXCLUSIVE, because its acquisition wait was not simulated.
 
+      Per-statement only (inside the sequence "statements" array, never top-level):
+        SKIPPED       a sequence statement that did not run because an earlier
+                      statement failed and the migration halted before it. Not a
+                      measurement; treat as not-verified.
+
       Submission/transport statuses (in "verdict" only; NOT a measurement):
         REJECTED      the lab will not run this statement (not a migration, multi
                       statement, too long, or a NONEXISTENT target on a static
@@ -215,12 +226,44 @@ def check_migration(
     against THAT shape, and drops everything afterwards. row_count is your
     approximate real table size: it drives the scale projection and (clamped) how
     many rows are seeded. Leave schema_ddl empty to use the stock orders table.
+
+    deadline_ms: the per-request lock deadline of YOUR application — the wait after
+    which one of your write requests would give up. A casualty is a write that
+    waited longer than this for its lock, so this single number IS the definition
+    of the casualty count. Pass your real client/HTTP timeout and the casualty
+    count reflects YOUR environment, not the lab's; leave it 0 for the lab default
+    (1500ms), and note the deadline that produced any count comes back on
+    casualties.deadline_ms. Bounded to 30s.
+
+    statements: run a MULTI-STATEMENT migration as an ordered SEQUENCE on ONE twin
+    instead of a single statement. Pass a list like
+        ["ALTER TABLE orders ADD COLUMN promo int",
+         "CREATE INDEX ON orders (promo)"]
+    and Brace runs them IN ORDER on one fresh clone, so a later statement sees the
+    schema the earlier ones produced (the second statement here would ERROR "column
+    does not exist" as a single run, because each single run gets a fresh twin).
+    Every statement passes the SAME allow-list a single run does — a sequence cannot
+    smuggle a non-allow-listed verb (max 10 statements). The result carries a
+    per-statement array ("statements") with each step's own verdict, blocked_seconds,
+    casualties, lock_modes and explanation; the top-level verdict/effective_verdict
+    are the worst-of, so gating on effective_verdict blocks the deploy if ANY step
+    would. When statements is set, sql is ignored. This is how you verify a
+    multi-step safe rewrite (ADD COLUMN; add a NOT VALID constraint; VALIDATE; ...)
+    as the script it actually is.
     """
-    payload = {"sql": sql, "mode": "custom"}
+    payload: dict = {"mode": "custom"}
+    if statements:
+        payload["statements"] = statements
+    else:
+        payload["sql"] = sql
     if target_rows > 0:
         payload["target_rows"] = target_rows
     if hostile:
         payload["hostile"] = True
+    if deadline_ms > 0:
+        # The API field is lock_timeout_ms (see internal/api/api.go runRequest); the
+        # MCP name deadline_ms is the agent-facing framing of the same value.
+        payload["lock_timeout_ms"] = deadline_ms
     if schema_ddl.strip():
         payload["schema_ddl"] = schema_ddl
         if row_count > 0:
