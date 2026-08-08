@@ -4,12 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Docs — Brace</title>
-<meta name="description" content="How Brace works: the science of a locking migration, the three ways to run it, hostile mode, scale projection, bring-your-own-data self-hosting, the HTTP API, and the honest limits.">
+<meta name="description" content="The manual for Brace, the crash-test lab for Postgres migrations: the science of a locking migration, the three ways to run it, hostile mode, scale projection, bring-your-own-data self-hosting, the HTTP API, and the honest limits.">
 <meta name="color-scheme" content="dark light">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="Brace">
 <meta property="og:title" content="Docs — Brace">
-<meta property="og:description" content="The manual for the crash-test lab for Postgres migrations: the science, the three modes, hostile mode, scale projection, self-hosting, the API, and the honest limits.">
+<meta property="og:description" content="How Brace measures the freeze a migration causes — the science, the three modes, hostile mode, scale projection, self-hosting on your own schema, the API, and the honest limits.">
 <meta name="twitter:card" content="summary">
 <meta name="twitter:title" content="Docs — Brace">
 <meta name="twitter:description" content="How Brace measures the freeze a migration causes — and how to run it from the web, from CI, or from an AI agent.">
@@ -26,27 +26,40 @@ document.documentElement.className+=' js';})();</script>
 
 <a class="skip" href="#what">Skip to the manual</a>
 
-<!-- ══ TOP RAIL ═══════════════════════════════════════════════ -->
+<!-- ══ TOP BAR ════════════════════════════════════════════════ -->
 <header class="rail">
-  <a class="rail__brand" href="index.html" style="text-decoration:none;color:inherit;">
-    <svg class="mark mark--live" viewBox="44 44 152 152" aria-hidden="true">
-      <defs><clipPath id="mk"><circle cx="120" cy="120" r="74"/></clipPath></defs>
-      <g clip-path="url(#mk)">
-        <rect x="46" y="46" width="74" height="74" class="mark__on"/>
-        <rect x="120" y="46" width="74" height="74" class="mark__off"/>
-        <rect x="46" y="120" width="74" height="74" class="mark__off"/>
-        <rect x="120" y="120" width="74" height="74" class="mark__on"/>
-        <path class="m-pulse" d="M 46 120 H 104 l 6 -16 l 8 32 l 6 -16 H 194"
-              fill="none" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
-      </g>
-      <circle cx="120" cy="120" r="74" fill="none" class="mark__ring" stroke-width="3"/>
-    </svg>
-    <div class="rail__names">
-      <b>BRACE</b>
-      <span>crash-test lab for postgres migrations</span>
-    </div>
+  <div class="rail__lead">
+    <button type="button" class="navtoggle" id="navToggle" aria-label="Open navigation" aria-expanded="false" aria-controls="dxside">
+      <svg class="burger" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+      <svg class="x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+    <a class="rail__brand" href="index.html" style="text-decoration:none;color:inherit;">
+      <svg class="mark mark--live" viewBox="44 44 152 152" aria-hidden="true">
+        <defs><clipPath id="mk"><circle cx="120" cy="120" r="74"/></clipPath></defs>
+        <g clip-path="url(#mk)">
+          <rect x="46" y="46" width="74" height="74" class="mark__on"/>
+          <rect x="120" y="46" width="74" height="74" class="mark__off"/>
+          <rect x="46" y="120" width="74" height="74" class="mark__off"/>
+          <rect x="120" y="120" width="74" height="74" class="mark__on"/>
+          <path class="m-pulse" d="M 46 120 H 104 l 6 -16 l 8 32 l 6 -16 H 194"
+                fill="none" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+        </g>
+        <circle cx="120" cy="120" r="74" fill="none" class="mark__ring" stroke-width="3"/>
+      </svg>
+      <div class="rail__names">
+        <b>BRACE</b>
+        <span>crash-test lab for postgres migrations</span>
+      </div>
+    </a>
     <span class="rail__docmark">docs</span>
-  </a>
+  </div>
+
+  <div class="rail__search" role="search">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+    <input type="text" id="docSearch" placeholder="Filter the manual…" aria-label="Filter documentation sections" autocomplete="off" spellcheck="false">
+    <kbd>/</kbd>
+  </div>
+
   <div class="rail__meta">
     <button type="button" class="chip chip--theme" id="themeToggle" aria-pressed="false" aria-label="Switch to light theme">
       <svg class="ico" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
@@ -56,170 +69,448 @@ document.documentElement.className+=' js';})();</script>
       </svg>
       <span class="chip__t">light</span>
     </button>
-    <a class="chip chip--ghlink" href="https://github.com/vinayaksonthalia/brace" target="_blank" rel="noopener noreferrer" data-repo>github</a>
+    <a class="chip chip--ghlink" href="https://github.com/vinayaksonthalia/brace" target="_blank" rel="noopener noreferrer">github</a>
     <a class="chip chip--go" href="lab.html">open the lab →</a>
   </div>
 </header>
 
-<main>
+<div class="nav-backdrop" id="navBackdrop" hidden></div>
 
-<!-- ══ MASTHEAD ═══════════════════════════════════════════════ -->
-<section class="dochero">
-  <div class="dochero__inner">
-    <p class="dochero__plate"><i>Manual</i> · <b>Brace</b> · the crash-test lab for Postgres migrations</p>
-    <h1>How Brace works.</h1>
-    <p class="dochero__sub">Brace runs the migration you are nervous about against a full-scale copy of a database, under live write traffic, and counts how many writes it kills. This page explains the science under that, the three ways to run it, and exactly where the rehearsal stops matching reality.</p>
-    <div class="dochero__cta">
-      <a class="btn btn--primary" href="lab.html">Open the lab <span aria-hidden="true">→</span></a>
-      <a class="btn btn--ghost" href="#science">Start reading <span aria-hidden="true">↓</span></a>
-    </div>
-  </div>
-</section>
+<div class="dxlayout">
 
-<!-- ══ CHAPTER SELECTOR ═══════════════════════════════════════
-     One skimmable jump control. A <details> disclosure, so it
-     works with no JS: the summary is the current chapter, the panel
-     lists every chapter as an in-page anchor. docs.js enhances it. -->
-<nav class="chapters" aria-label="Chapters">
-  <div class="chapters__inner">
-    <span class="chapters__lead">Chapter</span>
-    <details class="chapmenu" id="chapMenu">
-      <summary aria-label="Jump to a chapter">
-        <span class="chapmenu__cur" id="chapCur"><i>01</i>What Brace is</span>
-        <svg class="chapmenu__caret" width="14" height="14" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
-      </summary>
-      <div class="chapmenu__panel">
-        <ol>
-          <li><a href="#what">What Brace is</a></li>
-          <li><a href="#science">The science of a frozen write</a></li>
-          <li><a href="#usage">Three ways to run it</a></li>
-          <li><a href="#hostile">Hostile mode</a></li>
-          <li><a href="#scale">Scale projection</a></li>
-          <li><a href="#byod">Bring your own data</a></li>
-          <li><a href="#api">API reference</a></li>
-          <li><a href="#limits">Honest limitations</a></li>
-          <li><a href="#zerops">Why Zerops</a></li>
-        </ol>
+  <!-- ══ SIDEBAR ══════════════════════════════════════════════ -->
+  <aside class="dxside" id="dxside" aria-label="Documentation navigation">
+    <div class="dxside__inner">
+      <div class="side-search" role="search">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+        <input type="text" id="docSearchM" placeholder="Filter the manual…" aria-label="Filter documentation sections" autocomplete="off" spellcheck="false">
       </div>
-    </details>
-  </div>
-</nav>
 
-<div class="docframe">
-<article class="doc">
+      <nav class="dxnav" id="dxnav" aria-label="Sections">
+        <div class="navgroup">
+          <p class="navgroup__label">Start</p>
+          <ul>
+            <li><a class="navlink" href="#what" data-nav><span class="navlink__ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="6.5"/><path d="M8 7.4v3.4M8 5.1h.01"/></svg></span><span>What Brace is</span></a></li>
+            <li><a class="navlink" href="#quickstart" data-nav><span class="navlink__ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M8.6 1.6 3.4 8.6H7l-.7 5.8 5.3-7.4H8.2z"/></svg></span><span>Deploy your own</span></a></li>
+          </ul>
+        </div>
+        <div class="navgroup">
+          <p class="navgroup__label">Concepts</p>
+          <ul>
+            <li><a class="navlink" href="#science" data-nav><span class="navlink__ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M6.3 2h3.4M6.7 2v4.2L3.2 12a1 1 0 0 0 .9 1.5h7.8a1 1 0 0 0 .9-1.5L9.3 6.2V2"/><path d="M5.2 9.4h5.6"/></svg></span><span>The science</span></a></li>
+            <li><a class="navlink" href="#hostile" data-nav><span class="navlink__ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1.6 3 3.5v4.1c0 3.2 2.1 5.4 5 6.8 2.9-1.4 5-3.6 5-6.8V3.5z"/><path d="M8 5.4v3M8 10.3v.01"/></svg></span><span>Hostile mode</span></a></li>
+            <li><a class="navlink" href="#scale" data-nav><span class="navlink__ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M2 11.2 6 7.2l2.6 2.6L14 4.4"/><path d="M14 4.4h-3.4M14 4.4v3.4"/></svg></span><span>Scale projection</span></a></li>
+          </ul>
+        </div>
+        <div class="navgroup">
+          <p class="navgroup__label">Using Brace</p>
+          <ul>
+            <li><a class="navlink" href="#usage" data-nav><span class="navlink__ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="12" height="10" rx="1.6"/><path d="M2 6h12M4.4 4.5h.01M6 4.5h.01"/></svg></span><span>The web lab</span></a></li>
+            <li><a class="navlink" href="#cli" data-nav><span class="navlink__ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="12" height="10" rx="1.6"/><path d="M4.8 6.8 6.6 8.5 4.8 10.2M8.6 10.5h2.8"/></svg></span><span>CLI deploy-gate</span></a></li>
+            <li><a class="navlink" href="#mcp" data-nav><span class="navlink__ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="10" height="8" rx="2"/><path d="M8 2v3M5.7 8.4h.01M10.3 8.4h.01M6.4 11h3.2"/></svg></span><span>MCP verb</span></a></li>
+          </ul>
+        </div>
+        <div class="navgroup">
+          <p class="navgroup__label">Self-host</p>
+          <ul>
+            <li><a class="navlink" href="#byod" data-nav><span class="navlink__ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="8" cy="3.6" rx="5" ry="2"/><path d="M3 3.6v8.8c0 1.1 2.2 2 5 2s5-.9 5-2V3.6M3 8c0 1.1 2.2 2 5 2s5-.9 5-2"/></svg></span><span>Bring your own data</span></a></li>
+          </ul>
+        </div>
+        <div class="navgroup">
+          <p class="navgroup__label">Reference</p>
+          <ul>
+            <li><a class="navlink" href="#api" data-nav><span class="navlink__ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M6.4 2.6C5 2.6 5.2 4 5.2 5.4 5.2 6.8 4.3 7.2 3.4 7.2c.9 0 1.8.4 1.8 1.8 0 1.4-.2 2.8 1.2 2.8M9.6 2.6c1.4 0 1.2 1.4 1.2 2.8 0 1.4.9 1.8 1.8 1.8-.9 0-1.8.4-1.8 1.8 0 1.4.2 2.8-1.2 2.8"/></svg></span><span>API reference</span></a></li>
+            <li><a class="navlink" href="#limits" data-nav><span class="navlink__ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2.4 1.6 13.2h12.8z"/><path d="M8 6.5v3.1M8 11.3v.01"/></svg></span><span>Honest limits</span></a></li>
+            <li><a class="navlink" href="#zerops" data-nav><span class="navlink__ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="2.4" y="2.8" width="11.2" height="4.2" rx="1.2"/><rect x="2.4" y="9" width="11.2" height="4.2" rx="1.2"/><path d="M5 4.9h.01M5 11.1h.01"/></svg></span><span>Why Zerops</span></a></li>
+          </ul>
+        </div>
+        <p class="nav-empty">No section matches that.</p>
+      </nav>
 
-<!-- ══ 01 · WHAT BRACE IS ═════════════════════════════════════ -->
-<section class="doc-sec reveal" id="what" data-chapter="What Brace is">
-  <p class="eyebrow">What Brace is</p>
-  <h2>A crash-test lab for database migrations.</h2>
+      <div class="navmeta">
+        <a href="lab.html"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M6 12 10 8 6 4"/></svg>Open the web lab</a>
+        <a href="index.html"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M10 4 6 8l4 4"/></svg>Back to the overview</a>
+        <a href="https://github.com/vinayaksonthalia/brace" target="_blank" rel="noopener noreferrer"><svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 .8a7.2 7.2 0 0 0-2.28 14q.54.1.54-.24v-.9c-2 .43-2.43-.85-2.43-.85-.33-.83-.8-1.05-.8-1.05-.66-.45.05-.44.05-.44.73.05 1.11.75 1.11.75.65 1.11 1.7.79 2.11.6.07-.47.25-.79.46-.97-1.6-.18-3.28-.8-3.28-3.56 0-.79.28-1.43.75-1.93-.08-.19-.33-.93.07-1.94 0 0 .6-.2 1.98.73a6.9 6.9 0 0 1 3.6 0c1.38-.93 1.98-.73 1.98-.73.4 1.01.15 1.75.07 1.94.47.5.75 1.14.75 1.93 0 2.77-1.69 3.38-3.29 3.56.26.22.49.66.49 1.33v1.97c0 .34.36.29.54.24A7.2 7.2 0 0 0 8 .8Z"/></svg>Source on GitHub</a>
+      </div>
+    </div>
+  </aside>
 
-  <p><strong class="lead-in">In one line:</strong> Brace clones a database at production scale, fills it with live write traffic, then slams your migration into it — so the freeze happens to a crash-test dummy instead of to your users.</p>
+  <!-- ══ CONTENT ══════════════════════════════════════════════ -->
+  <main class="dxmain">
+  <article class="doc">
 
-  <p>A schema change that looks harmless on an empty staging table can lock a live table for tens of seconds. During that lock, writes pile up; the ones that wait too long fail outright. Brace exists to show you that — as a measured number of dead writes on a throwaway copy — before the same statement touches production.</p>
+    <!-- masthead -->
+    <div class="dochero">
+      <p class="dochero__plate"><i>Manual</i> · <b>Brace</b> · the crash-test lab for Postgres migrations</p>
+      <h1>How Brace works.</h1>
+      <p class="dochero__sub">Brace runs the migration you are nervous about against a full-scale copy of a database, under live write traffic, and counts how many writes it kills. This is the manual: the science under it, the three ways to run it, hostile mode, self-hosting against your own schema, the API — and exactly where the rehearsal stops matching reality.</p>
+      <div class="dochero__cta">
+        <a class="btn btn--primary" href="lab.html">Open the lab <span aria-hidden="true">→</span></a>
+        <a class="btn btn--ghost" href="#what">Start reading <span aria-hidden="true">↓</span></a>
+      </div>
+    </div>
 
-  <p>The whole idea is <strong>the same end state, two fates.</strong> The same index — <code>orders (email)</code> — can be built two ways. Both leave an identical index behind, yet one is safe to run against a live table and the other is an outage:</p>
+    <!-- ══ 01 · WHAT BRACE IS ═══════════════════════════════════ -->
+    <section class="doc-sec reveal" id="what" data-title="What Brace is">
+      <p class="eyebrow">What Brace is</p>
+      <h2>A crash-test lab for database migrations.</h2>
 
-  <div class="doc-code">
-    <div class="doc-code__cap"><b>what most people ship</b></div>
+      <p><strong class="lead-in">In one line:</strong> Brace clones a database at production scale, fills it with live write traffic, then slams your migration into it — so the freeze happens to a crash-test dummy instead of to your users.</p>
+
+      <p>A schema change that looks harmless on an empty staging table can lock a live table for tens of seconds. During that lock, writes pile up; the ones that wait too long fail outright. Brace exists to show you that — as a measured number of dead writes on a throwaway copy — before the same statement touches production.</p>
+
+      <figure class="shot shot--wide">
+        <div class="shot__frame">
+          <img src="img/crash.gif" width="1200" height="724" loading="lazy" decoding="async"
+               alt="The Brace lab during a naive CREATE INDEX: the live write-rate chart craters from twelve thousand writes per second to zero the instant the lock lands, while the casualty counter climbs.">
+        </div>
+        <figcaption>A real run on the live lab — a naive <code>CREATE INDEX</code>: writes crater to zero on a throwaway twin while the casualty count climbs.</figcaption>
+      </figure>
+
+      <p>The whole idea is <strong>the same end state, two fates.</strong> The same index — <code>orders (customer_id)</code> — can be built two ways. Both leave an identical index behind, yet one is safe to run against a live table and the other is an outage:</p>
+
+      <div class="doc-code">
+        <div class="doc-code__cap"><b>what most people ship</b></div>
 <pre><span class="c">-- takes a SHARE lock and holds it for the whole build — every write queues behind it</span>
-CREATE INDEX idx_orders_email ON orders (email);</pre>
-  </div>
+CREATE INDEX idx_orders_customer_id ON orders (customer_id);</pre>
+      </div>
 
-  <p>On Brace's 10-million-row twin, under live checkout / login / cart traffic, that holds its <code>SHARE</code> lock for the entire build: <strong>15.8–20.5 seconds</strong> of frozen writes and <strong>240–312 writes</strong> killed at the <code>lock_timeout</code> — real <code>55P03</code> errors, not a simulation of them.</p>
+      <p>On Brace's 10-million-row twin, under live checkout / login / cart traffic, that holds its <code>SHARE</code> lock for the entire build: <strong>28.0 seconds</strong> of frozen writes and <strong>432 writes</strong> killed at the <code>lock_timeout</code> — real <code>55P03</code> errors, not a simulation of them. (Magnitude varies with load, roughly 7.5–28s and 144–432 killed; the verdict is the finding, the decimal is not.)</p>
 
-  <div class="doc-code">
-    <div class="doc-code__cap"><b>the rewrite Brace suggests</b></div>
+      <div class="doc-code">
+        <div class="doc-code__cap"><b>the rewrite Brace suggests</b></div>
 <pre><span class="c">-- SHARE UPDATE EXCLUSIVE — builds the same index without ever blocking writers</span>
-CREATE INDEX CONCURRENTLY idx_orders_email ON orders (email);</pre>
-  </div>
-
-  <p>Same index, same twin, same traffic: <strong>0.00 seconds</strong> frozen, <strong>0 writes</strong> dead. Both are single statements the lab runs and measures end to end, so the contrast is counted, not asserted. Brace does not read your SQL and guess; it runs your SQL and counts the bodies.</p>
-
-  <div class="callout">
-    <span class="callout__mark">one statement per run</span>
-    <p>Some safe rewrites are a <em>sequence</em>, not one statement. Adding a <code>NOT NULL</code> column without a table rewrite means adding the column nullable, backfilling in batches, then <code>ADD CONSTRAINT … CHECK (col IS NOT NULL) NOT VALID</code> followed by <code>VALIDATE CONSTRAINT</code> — a validate scan that doesn't hold the blocking lock. Brace measures a single statement per run, so rehearse each step on its own. That is a conceptual pattern, not one measured lab result.</p>
-  </div>
-</section>
-
-<!-- ══ 02 · THE SCIENCE ═══════════════════════════════════════ -->
-<section class="doc-sec reveal" id="science" data-chapter="The science of a frozen write">
-  <p class="eyebrow">The science</p>
-  <h2>Why a lock freezes writes — and how Brace measures it.</h2>
-
-  <div class="eli">
-    <div class="eli__tag">explain it plainly</div>
-    <div class="eli__body">
-      <p>Picture a busy shop with one checkout lane open. To restock a shelf, a clerk closes that lane and stands in front of it. Every shopper with a full cart just waits — they can't pay. Wait long enough and some of them give up, abandon the cart, and walk out.</p>
-      <p>A locking migration does exactly that to a database table: while it changes the table, every write to that table queues behind it. Writes that wait past their timeout don't merely slow down — they fail and roll back. Those abandoned carts are your users' failed checkouts, logins and orders. Brace's job is to count them before it's your real shop.</p>
-    </div>
-  </div>
-
-  <h3>Not every lock is the same lock</h3>
-  <p>Postgres has a ladder of lock strengths. What a statement freezes depends on which rung it grabs:</p>
-
-  <div class="doc-tablewrap">
-    <table class="doc-table">
-      <thead><tr><th>Lock mode</th><th>Taken by, for example</th><th>What it freezes</th></tr></thead>
-      <tbody>
-        <tr><td><code>SHARE</code></td><td>A plain <code>CREATE INDEX</code></td><td>Blocks <strong>writes</strong> (INSERT / UPDATE / DELETE). Reads still work.</td></tr>
-        <tr><td><code>ACCESS EXCLUSIVE</code></td><td>An <code>ALTER TABLE</code> that rewrites the table</td><td>Blocks <strong>everything</strong> — reads included.</td></tr>
-        <tr><td><code>SHARE UPDATE EXCLUSIVE</code></td><td><code>CREATE INDEX CONCURRENTLY</code>, <code>VACUUM</code></td><td>Blocks <strong>nothing</strong>. Writers and readers keep going.</td></tr>
-      </tbody>
-    </table>
-  </div>
-
-  <p>A blocked write doesn't wait forever. Every write in the load generator runs under a <code>lock_timeout</code> of <strong>1.5 seconds</strong>; a write that waits longer than that is cancelled by Postgres with <strong>SQLSTATE <code>55P03</code></strong> (<code>lock_not_available</code>) and rolled back. That is a casualty — a write that a real user issued and that actually died.</p>
-
-  <h3>Measured two independent ways</h3>
-  <p>Brace watches the freeze with two separate instruments and expects them to agree:</p>
-  <ul>
-    <li><strong>Write-rate collapse</strong> — the load generator's throughput falling toward zero writes per second the moment the lock lands.</li>
-    <li><strong>The catalog itself</strong> — <code>pg_stat_activity</code> and <code>pg_locks</code>, sampled directly every <strong>250&nbsp;ms</strong> during the run, showing the blocking lock held and the writers queued behind it.</li>
-  </ul>
-  <p>A casualty is counted <strong>only</strong> for a genuine <code>55P03</code> lock timeout — never inferred from a slow response, a cancellation (<code>57014</code>), or a deadlock (<code>40P01</code>). The report then translates the raw count into user terms: not "312 writes rolled back" but 312 denied checkouts, logins and cart-adds, broken out by label.</p>
-
-  <h3>What that looks like across common migrations</h3>
-  <p>One run, 10M-row twin, roughly 12,000 writes/sec baseline, on the hardware Brace was measured on (dedicated 2–3 vCPU, PostgreSQL 16):</p>
-  <div class="doc-tablewrap">
-    <table class="doc-table">
-      <thead><tr><th>Migration</th><th>Verdict</th><th>Freeze</th><th>Writes killed</th></tr></thead>
-      <tbody>
-        <tr><td><code>ADD COLUMN … NOT NULL DEFAULT random()</code></td><td><span class="pill pill--red">unsafe</span></td><td class="num">31.0s</td><td class="num">480</td></tr>
-        <tr><td><code>ADD COLUMN z serial</code> <em>(looks harmless — isn't)</em></td><td><span class="pill pill--red">unsafe</span></td><td class="num">26.2s</td><td class="num">408</td></tr>
-        <tr><td><code>ALTER COLUMN … TYPE …</code></td><td><span class="pill pill--red">unsafe</span></td><td class="num">20.5s</td><td class="num">312</td></tr>
-        <tr><td><code>CREATE INDEX</code> (naive)</td><td><span class="pill pill--red">unsafe</span></td><td class="num">15.8–20.5s</td><td class="num">240–312</td></tr>
-        <tr><td><code>REINDEX INDEX</code></td><td><span class="pill pill--red">unsafe</span></td><td class="num">11.0s</td><td class="num">168</td></tr>
-        <tr><td><code>CREATE INDEX CONCURRENTLY</code></td><td><span class="pill pill--green">safe</span></td><td class="num">0.00s</td><td class="num">0</td></tr>
-        <tr><td><code>VACUUM ANALYZE</code></td><td><span class="pill pill--green">safe</span></td><td class="num">0s</td><td class="num">0</td></tr>
-      </tbody>
-    </table>
-  </div>
-  <p>Notice <code>ADD COLUMN z serial</code>: it looks like the harmless case and passes most linters, yet it holds the same table-rewrite lock as the obviously-dangerous <code>DEFAULT random()</code> version. That is the gap a rehearsal closes and a static rule can't.</p>
-</section>
-
-<!-- ══ 03 · USING IT ══════════════════════════════════════════ -->
-<section class="doc-sec reveal" id="usage" data-chapter="Three ways to run it">
-  <p class="eyebrow">Using it</p>
-  <h2>Three ways to run a rehearsal.</h2>
-  <p class="doc-lede">The same engine answers the same question — "will this migration hurt?" — whether a human, a CI pipeline, or an AI agent is asking.</p>
-
-  <ol class="modes">
-    <li class="mode">
-      <div class="mode__head">
-        <span class="mode__no">01</span>
-        <span class="mode__name">Web lab</span>
-        <span class="mode__where">lab.html · no account</span>
+CREATE INDEX CONCURRENTLY idx_orders_customer_id ON orders (customer_id);</pre>
       </div>
-      <p>Paste a migration, or pick a preset, and watch it crash. The write-rate chart collapses live as the lock lands, and a report card lands the moment the twin stops moving: freeze duration, casualties by label, the exact lock mode taken, and — on an unsafe verdict — a safe rewrite that has already been rehearsed, not just recommended.</p>
-      <a class="mode__link" href="lab.html">Enter the lab →</a>
-    </li>
-    <li class="mode">
-      <div class="mode__head">
-        <span class="mode__no">02</span>
-        <span class="mode__name">CLI deploy-gate</span>
-        <span class="mode__where">brace-check · runs in CI</span>
+
+      <p>Same index, same twin, same traffic: <strong>0.00 seconds</strong> frozen, <strong>0 writes</strong> dead. Both are single statements the lab runs and measures end to end, so the contrast is counted, not asserted. Brace does not read your SQL and guess; it runs your SQL and counts the bodies.</p>
+
+      <!-- diagram: the twin lifecycle -->
+      <figure class="diagram" aria-labelledby="dg-life-t">
+        <div class="dg-frame">
+        <svg viewBox="0 0 680 150" role="img" aria-labelledby="dg-life-t dg-life-d">
+          <title id="dg-life-t">The disposable-twin lifecycle</title>
+          <desc id="dg-life-d">A permanent template is cloned into a throwaway twin; the migration runs and is measured on the twin; the twin is then dropped. The real template is never touched.</desc>
+          <!-- template -->
+          <rect class="dg-node dg-node--accent" x="8" y="46" width="150" height="58" rx="8"/>
+          <text class="dg-t" x="83" y="72" text-anchor="middle" font-size="13">brace_template</text>
+          <text class="dg-t--mono" x="83" y="90" text-anchor="middle" font-size="10.5">permanent · 10M rows</text>
+          <!-- arrow 1 -->
+          <line class="dg-flow" x1="162" y1="75" x2="212" y2="75"/>
+          <polygon class="dg-arrow" points="212,75 204,71 204,79"/>
+          <text class="dg-t--mono" x="187" y="66" text-anchor="middle" font-size="9">clone</text>
+          <!-- twin -->
+          <rect class="dg-node" x="216" y="46" width="150" height="58" rx="8"/>
+          <text class="dg-t" x="291" y="72" text-anchor="middle" font-size="13">disposable twin</text>
+          <text class="dg-t--mono" x="291" y="90" text-anchor="middle" font-size="10.5">TEMPLATE copy</text>
+          <!-- arrow 2 -->
+          <line class="dg-flow" x1="370" y1="75" x2="420" y2="75"/>
+          <polygon class="dg-arrow" points="420,75 412,71 412,79"/>
+          <!-- run + measure -->
+          <rect class="dg-node" x="424" y="46" width="150" height="58" rx="8"/>
+          <text class="dg-t" x="499" y="72" text-anchor="middle" font-size="13">run + measure</text>
+          <text class="dg-t--mono" x="499" y="90" text-anchor="middle" font-size="10.5">under live traffic</text>
+          <!-- arrow 3 -->
+          <line class="dg-flow dg-flow--red" x1="578" y1="75" x2="628" y2="75"/>
+          <polygon class="dg-arrow dg-arrow--red" points="628,75 620,71 620,79"/>
+          <!-- drop -->
+          <rect class="dg-node dg-node--crash" x="596" y="46" width="78" height="58" rx="8"/>
+          <text class="dg-t--red" x="635" y="72" text-anchor="middle" font-size="12">DROP</text>
+          <text class="dg-t--mono" x="635" y="90" text-anchor="middle" font-size="9">discarded</text>
+          <!-- return loop -->
+          <path class="dg-flow dg-flow--amber" d="M635 46 C635 20 291 18 291 42"/>
+          <polygon class="dg-arrow" points="291,46 287,38 295,38" style="fill:var(--amber)"/>
+          <text class="dg-t--mono" x="463" y="16" text-anchor="middle" font-size="9" style="fill:var(--amber)">every run gets a fresh twin</text>
+        </svg>
+        </div>
+        <figcaption id="dg-life-t-cap">Every crash happens on a physical copy that is dropped when the run ends. Nothing real is ever at risk.</figcaption>
+      </figure>
+
+      <div class="callout">
+        <span class="callout__mark">one statement per run</span>
+        <p>Brace measures a single statement per run. Some safe rewrites are a <em>sequence</em> — for a <code>NOT NULL</code> column without a table rewrite you add the column nullable, backfill in batches, then <code>ADD CONSTRAINT … CHECK (col IS NOT NULL) NOT VALID</code> followed by <code>VALIDATE CONSTRAINT</code>. Rehearse each such step on its own; that is a conceptual pattern, not one measured lab result.</p>
       </div>
+    </section>
+
+    <!-- ══ 02 · DEPLOY YOUR OWN ═════════════════════════════════ -->
+    <section class="doc-sec reveal" id="quickstart" data-title="Deploy your own">
+      <p class="eyebrow">Deploy your own</p>
+      <h2>Stand up your own Brace, or use the public lab.</h2>
+      <p class="doc-lede">Brace needs a real Postgres <strong>superuser</strong> — to create and drop twin databases every run — and native <code>CREATE DATABASE … TEMPLATE</code> cloning. Both are rare on managed Postgres and native to <a href="https://zerops.io" target="_blank" rel="noopener noreferrer">Zerops</a>. One <code>import.yml</code> stands up all three services.</p>
+
+      <div class="doc-code">
+        <div class="doc-code__cap"><b>deploy — three services: db, api, web</b></div>
+<pre>zcli project project-import ./import.yml   <span class="c"># db · api · web</span>
+zcli push --serviceId &lt;api-id&gt;             <span class="c"># setup: api — builds cmd/brace</span>
+zcli push --serviceId &lt;web-id&gt; --setup web --workingDir ./web</pre>
+      </div>
+
+      <p>That is it: <code>db</code> (<code>postgresql@16</code>, dedicated 2–3&nbsp;vCPU, <code>NON_HA</code>), <code>api</code> (<code>go@1</code>), and <code>web</code> (static), wired by <code>zerops.yml</code> and <code>import.yml</code>. The api seeds its own 10M-row template on first boot; <code>/healthz</code> answers immediately, and <code>/api/*</code> reports <code>{"error":"starting"}</code> until the template is warm.</p>
+
+      <p>Prefer to try it before you deploy? The public lab needs no account and no login — paste a migration and watch it crash. Everything on this page is measured there.</p>
+      <div class="dochero__cta" style="margin-top:var(--s5)">
+        <a class="btn btn--primary" href="lab.html">Open the public lab <span aria-hidden="true">→</span></a>
+        <a class="btn btn--ghost" href="#byod">Point it at your own data <span aria-hidden="true">↓</span></a>
+      </div>
+    </section>
+
+    <!-- ══ 03 · THE SCIENCE ═════════════════════════════════════ -->
+    <section class="doc-sec reveal" id="science" data-title="The science">
+      <p class="eyebrow">The science</p>
+      <h2>Why a lock freezes writes — and how Brace measures it.</h2>
+
+      <div class="eli">
+        <div class="eli__tag">explain it plainly</div>
+        <div class="eli__body">
+          <p>Picture a busy shop with one checkout lane open. To restock a shelf, a clerk closes that lane and stands in front of it. Every shopper with a full cart just waits — they can't pay. Wait long enough and some of them give up, abandon the cart, and walk out.</p>
+          <p>A locking migration does exactly that to a database table: while it changes the table, every write to that table queues behind it. Writes that wait past their timeout don't merely slow down — they fail and roll back. Those abandoned carts are your users' failed checkouts, logins and orders. Brace's job is to count them before it's your real shop.</p>
+        </div>
+      </div>
+
+      <h3>How a rehearsal runs</h3>
+      <p>One run is a fixed pipeline. Every stage happens on the disposable twin, and the whole thing takes about ten seconds:</p>
+
+      <figure class="diagram" aria-labelledby="dg-flow-t">
+        <div class="dg-frame">
+        <svg viewBox="0 0 680 566" role="img" aria-labelledby="dg-flow-t dg-flow-d">
+          <title id="dg-flow-t">How one rehearsal runs, step by step</title>
+          <desc id="dg-flow-d">Paste the migration; clone a throwaway twin from the 10M-row template; start live labeled write traffic with 24 workers under a 1.5 second lock timeout; run the migration under that load; measure the freeze two independent ways — write-rate collapse and pg_locks sampled every 250 milliseconds; produce a verdict with casualties counted by label; then drop the twin.</desc>
+          <!-- connectors first (behind nodes) -->
+          <g>
+            <line class="dg-flow" x1="340" y1="62" x2="340" y2="90"/><polygon class="dg-arrow" points="340,90 336,82 344,82"/>
+            <line class="dg-flow" x1="340" y1="142" x2="340" y2="170"/><polygon class="dg-arrow" points="340,170 336,162 344,162"/>
+            <line class="dg-flow" x1="340" y1="222" x2="340" y2="250"/><polygon class="dg-arrow" points="340,250 336,242 344,242"/>
+            <line class="dg-flow" x1="340" y1="302" x2="340" y2="330"/><polygon class="dg-arrow" points="340,330 336,322 344,322"/>
+            <line class="dg-flow" x1="340" y1="382" x2="340" y2="410"/><polygon class="dg-arrow" points="340,410 336,402 344,402"/>
+            <line class="dg-flow dg-flow--red" x1="340" y1="462" x2="340" y2="490"/><polygon class="dg-arrow dg-arrow--red" points="340,490 336,482 344,482"/>
+          </g>
+          <!-- node 1 -->
+          <rect class="dg-node" x="150" y="10" width="380" height="52" rx="8"/>
+          <text class="dg-no" x="172" y="41" font-size="12">01</text>
+          <text class="dg-t" x="200" y="41" font-size="14">Paste the migration</text>
+          <!-- node 2 -->
+          <rect class="dg-node" x="150" y="90" width="380" height="52" rx="8"/>
+          <text class="dg-no" x="172" y="114" font-size="12">02</text>
+          <text class="dg-t" x="200" y="114" font-size="14">Clone a throwaway twin</text>
+          <text class="dg-t--mono" x="200" y="131" font-size="10.5">from brace_template · 10M rows</text>
+          <!-- node 3 -->
+          <rect class="dg-node" x="150" y="170" width="380" height="52" rx="8"/>
+          <text class="dg-no" x="172" y="194" font-size="12">03</text>
+          <text class="dg-t" x="200" y="194" font-size="14">Start live write traffic</text>
+          <text class="dg-t--mono" x="200" y="211" font-size="10.5">24 workers · lock_timeout 1.5s · labeled</text>
+          <!-- node 4 -->
+          <rect class="dg-node dg-node--accent" x="150" y="250" width="380" height="52" rx="8"/>
+          <text class="dg-no" x="172" y="281" font-size="12">04</text>
+          <text class="dg-t" x="200" y="281" font-size="14">Run the migration under load</text>
+          <!-- node 5 -->
+          <rect class="dg-node" x="150" y="330" width="380" height="52" rx="8"/>
+          <text class="dg-no" x="172" y="354" font-size="12">05</text>
+          <text class="dg-t" x="200" y="354" font-size="14">Measure two independent ways</text>
+          <text class="dg-t--mono" x="200" y="371" font-size="10.5">write-rate collapse + pg_locks @250ms</text>
+          <!-- node 6 -->
+          <rect class="dg-node" x="150" y="410" width="380" height="52" rx="8"/>
+          <text class="dg-no" x="172" y="434" font-size="12">06</text>
+          <text class="dg-t" x="200" y="434" font-size="14">Verdict + casualties by label</text>
+          <text class="dg-t--mono" x="200" y="451" font-size="10.5">SAFE / UNSAFE · 55P03 count</text>
+          <!-- node 7 -->
+          <rect class="dg-node dg-node--crash" x="150" y="490" width="380" height="52" rx="8"/>
+          <text class="dg-t--red" x="172" y="521" font-size="12">✕</text>
+          <text class="dg-t" x="200" y="521" font-size="14">Twin dropped — nothing real touched</text>
+        </svg>
+        </div>
+        <figcaption>Seven stages, all on a throwaway copy. The verdict is a counted fact, not a static guess.</figcaption>
+      </figure>
+
+      <h3>Not every lock is the same lock</h3>
+      <p>Postgres has a ladder of lock strengths. What a statement freezes depends on which rung it grabs:</p>
+
+      <ul class="cards" aria-label="Lock modes">
+        <li class="card">
+          <div class="card__ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg></div>
+          <p class="card__title"><code>SHARE</code></p>
+          <p class="card__desc">Taken by a plain <code>CREATE INDEX</code>. Blocks <strong>writes</strong> (INSERT / UPDATE / DELETE). Reads still work.</p>
+          <p class="card__where">conflicts with ROW EXCLUSIVE</p>
+        </li>
+        <li class="card">
+          <div class="card__ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M7 10V7a5 5 0 0 1 10 0v3"/><path d="M12 14v2"/></svg></div>
+          <p class="card__title"><code>ACCESS EXCLUSIVE</code></p>
+          <p class="card__desc">Taken by an <code>ALTER TABLE</code> that rewrites the table. Blocks <strong>everything</strong> — reads included.</p>
+          <p class="card__where">the strongest lock</p>
+        </li>
+        <li class="card">
+          <div class="card__ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5l7 7-7 7"/></svg></div>
+          <p class="card__title"><code>SHARE UPDATE EXCLUSIVE</code></p>
+          <p class="card__desc">Taken by <code>CREATE INDEX CONCURRENTLY</code>, <code>VACUUM</code>. Blocks <strong>nothing</strong>. Writers and readers keep going.</p>
+          <p class="card__where">the safe path</p>
+        </li>
+      </ul>
+
+      <p>A blocked write doesn't wait forever. Every write in the load generator runs under a <code>lock_timeout</code> of <strong>1.5 seconds</strong>; a write that waits longer is cancelled by Postgres with <strong>SQLSTATE <code>55P03</code></strong> (<code>lock_not_available</code>) and rolled back. That is a casualty — a write a real user issued that actually died.</p>
+
+      <h3>Why writes die but reads don't</h3>
+      <p>A plain <code>CREATE INDEX</code> takes <code>SHARE</code>, which conflicts with the <code>ROW EXCLUSIVE</code> lock every <code>INSERT</code>, <code>UPDATE</code> and <code>DELETE</code> needs — so every write queues. But <code>SELECT</code> only takes <code>ACCESS SHARE</code>, which does <em>not</em> conflict, so reads sail through. That is why this outage looks like <em>"the site is up but nothing saves."</em></p>
+
+      <figure class="diagram" aria-labelledby="dg-lock-t">
+        <div class="dg-frame">
+        <svg viewBox="0 0 680 236" role="img" aria-labelledby="dg-lock-t dg-lock-d">
+          <title id="dg-lock-t">Which traffic the SHARE lock conflicts with</title>
+          <desc id="dg-lock-d">A plain CREATE INDEX holds a SHARE lock. Writers take ROW EXCLUSIVE, which conflicts, so writes queue and die at the lock timeout with error 55P03. Readers take ACCESS SHARE, which does not conflict, so reads keep flowing.</desc>
+          <!-- top: the migration -->
+          <rect class="dg-node dg-node--accent" x="215" y="8" width="250" height="50" rx="8"/>
+          <text class="dg-t" x="340" y="30" text-anchor="middle" font-size="13">plain CREATE INDEX</text>
+          <text class="dg-t--mono" x="340" y="47" text-anchor="middle" font-size="10.5">holds a SHARE lock</text>
+          <!-- branches -->
+          <path class="dg-flow dg-flow--red" d="M290 58 C290 90 175 92 175 116"/>
+          <polygon class="dg-arrow dg-arrow--red" points="175,120 171,112 179,112"/>
+          <path class="dg-flow dg-flow--green" d="M390 58 C390 90 505 92 505 116"/>
+          <polygon class="dg-arrow dg-arrow--green" points="505,120 501,112 509,112"/>
+          <!-- left: writers blocked -->
+          <rect class="dg-node dg-node--crash" x="30" y="120" width="290" height="98" rx="8"/>
+          <text class="dg-t" x="50" y="146" font-size="13">Writers — ROW EXCLUSIVE</text>
+          <text class="dg-t--red" x="50" y="146" font-size="13" opacity="0"> </text>
+          <text class="dg-t--mono" x="50" y="167" font-size="10.5" style="fill:var(--ink-2)">INSERT · UPDATE · DELETE</text>
+          <text class="dg-t--red" x="50" y="192" font-size="12">CONFLICTS → queue</text>
+          <text class="dg-t--mono" x="50" y="209" font-size="10.5" style="fill:var(--ink-2)">die at lock_timeout · 55P03</text>
+          <!-- right: readers pass -->
+          <rect class="dg-node dg-node--safe" x="360" y="120" width="290" height="98" rx="8"/>
+          <text class="dg-t" x="380" y="146" font-size="13">Readers — ACCESS SHARE</text>
+          <text class="dg-t--mono" x="380" y="167" font-size="10.5" style="fill:var(--ink-2)">SELECT</text>
+          <text class="dg-t--green" x="380" y="192" font-size="12">NO CONFLICT → pass</text>
+          <text class="dg-t--mono" x="380" y="209" font-size="10.5" style="fill:var(--ink-2)">reads keep flowing</text>
+        </svg>
+        </div>
+        <figcaption>The signature of a locking migration: the site is up, but nothing saves.</figcaption>
+      </figure>
+
+      <h3>Measured two independent ways</h3>
+      <p>Brace watches the freeze with two separate instruments and expects them to agree:</p>
+      <ul>
+        <li><strong>Write-rate collapse</strong> — the load generator's throughput falling toward zero writes per second the moment the lock lands.</li>
+        <li><strong>The catalog itself</strong> — <code>pg_stat_activity</code> and <code>pg_locks</code>, sampled directly every <strong>250&nbsp;ms</strong> during the run, showing the blocking lock held and the writers queued behind it.</li>
+      </ul>
+      <p>A casualty is counted <strong>only</strong> for a genuine <code>55P03</code> lock timeout — never inferred from a slow response, a cancellation (<code>57014</code>), or a deadlock (<code>40P01</code>). The report then translates the raw count into user terms: not "432 writes rolled back" but 432 denied checkouts, logins and cart-adds, broken out by label.</p>
+
+      <figure class="shot shot--tall">
+        <div class="shot__frame">
+          <img src="img/report-unsafe.png" width="1180" height="2212" loading="lazy" decoding="async"
+               alt="The Brace report card for a naive CREATE INDEX: an UNSAFE verdict, 28.0 seconds frozen, 432 writes killed broken out by label, the freeze measured two independent ways at 28.0s and 28.0s, a plain-English explanation of the SHARE lock, and the freeze projected onto a 100-million-row table.">
+        </div>
+        <figcaption>The report card from that exact run — UNSAFE, 28.0s frozen, 432 writes killed by label, the freeze measured two independent ways (28.0s / 28.0s), the lock explained in plain English, and projected onto a 100M-row table.</figcaption>
+      </figure>
+
+      <h3>What that looks like across common migrations</h3>
+      <p>One run, 10M-row twin, roughly 12,000 writes/sec baseline, on the hardware Brace was measured on (dedicated 2–3 vCPU, PostgreSQL 16):</p>
+      <div class="doc-tablewrap">
+        <table class="doc-table">
+          <thead><tr><th>Migration</th><th>Verdict</th><th>Freeze</th><th>Writes killed</th></tr></thead>
+          <tbody>
+            <tr><td><code>ADD COLUMN … NOT NULL DEFAULT random()</code></td><td><span class="pill pill--red">unsafe</span></td><td class="num">31.0s</td><td class="num">480</td></tr>
+            <tr><td><code>ADD COLUMN z serial</code> <em>(looks harmless — isn't)</em></td><td><span class="pill pill--red">unsafe</span></td><td class="num">26.2s</td><td class="num">408</td></tr>
+            <tr><td><code>ALTER COLUMN … TYPE …</code></td><td><span class="pill pill--red">unsafe</span></td><td class="num">20.5s</td><td class="num">312</td></tr>
+            <tr><td><code>CREATE INDEX</code> (naive)</td><td><span class="pill pill--red">unsafe</span></td><td class="num">7.5–28.0s</td><td class="num">144–432</td></tr>
+            <tr><td><code>REINDEX INDEX</code></td><td><span class="pill pill--red">unsafe</span></td><td class="num">11.0s</td><td class="num">168</td></tr>
+            <tr><td><code>CREATE INDEX CONCURRENTLY</code></td><td><span class="pill pill--green">safe</span></td><td class="num">0.00s</td><td class="num">0</td></tr>
+            <tr><td><code>VACUUM ANALYZE</code></td><td><span class="pill pill--green">safe</span></td><td class="num">0s</td><td class="num">0</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Notice <code>ADD COLUMN z serial</code>: it looks like the harmless case and passes most linters, yet it holds the same table-rewrite lock as the obviously-dangerous <code>DEFAULT random()</code> version. That is the gap a rehearsal closes and a static rule can't.</p>
+    </section>
+
+    <!-- ══ 04 · HOSTILE MODE ════════════════════════════════════ -->
+    <section class="doc-sec reveal" id="hostile" data-title="Hostile mode">
+      <p class="eyebrow">Hostile mode</p>
+      <h2>Measuring the freeze a fast statement <em>would</em> cause.</h2>
+
+      <p><strong class="lead-in">The problem it solves:</strong> some dangerous statements are dangerous only under contention. On an idle twin, a statement like <code>ALTER TABLE … ADD COLUMN</code> (with no default) acquires its <code>ACCESS EXCLUSIVE</code> lock instantly, does its work in milliseconds, and reports zero casualties. In production, that same statement has to <em>wait</em> for the lock — behind whatever transaction is already touching the table — and while it waits, every other write waits behind it.</p>
+
+      <p>Hostile mode holds a transaction open on the twin so the migration's lock <strong>acquisition</strong> has to queue, exactly as it would in production. The freeze that would otherwise be assumed is now measured:</p>
+
+      <div class="doc-tablewrap">
+        <table class="doc-table">
+          <thead><tr><th>Hostile mode</th><th>Verdict for <code>ADD COLUMN foo int</code></th><th>Why</th></tr></thead>
+          <tbody>
+            <tr><td class="num">off</td><td><span class="pill pill--green">safe</span> · 0.0s, qualifier <code>acquisition_not_simulated</code></td><td>Instant in isolation — the wait was never tested, so Brace refuses to call it an unqualified green light.</td></tr>
+            <tr><td class="num">on</td><td><span class="pill pill--red">unsafe</span> · ~2s frozen, measured</td><td>It queued behind the held transaction, and every write queued behind it.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>This is the real-world lock-acquisition cascade — the outage pattern nobody else reproduces — turned into a measured number instead of a footnote. Set it per run (<code>hostile: true</code>) or globally (<code>BRACE_HOSTILE</code>).</p>
+
+      <div class="callout">
+        <span class="callout__mark">no false greens</span>
+        <p>Hostile mode can't invent a freeze either. If the migration's lock never actually conflicts with the held transaction — say <code>ALTER INDEX … RENAME</code>, which takes only <code>SHARE UPDATE EXCLUSIVE</code> and blocks nothing — the run reports <code>contention_not_engaged</code> rather than claiming a freeze it didn't cause. Turn it on for fast DDL whose real risk is the wait for the lock; leave it off for statements that already do heavy work under the lock.</p>
+      </div>
+    </section>
+
+    <!-- ══ 05 · SCALE PROJECTION ════════════════════════════════ -->
+    <section class="doc-sec reveal" id="scale" data-title="Scale projection">
+      <p class="eyebrow">Scale projection</p>
+      <h2>The twin is a sample of your database, not your database.</h2>
+
+      <p><strong class="lead-in">The key fact:</strong> whether a statement takes a blocking lock does not depend on table size — but <em>how long</em> it holds that lock does, because the work under the lock (a rewrite, a full index build) scales with row count. So a 10M-row twin can measure a freeze too short to call unsafe, while the same statement against a 500M-row production table would be an outage.</p>
+
+      <p>Brace's answer is a projection, not a bigger twin. Tell it your real row count — <code>BRACE_TARGET_ROWS</code> in the web lab, <code>-target-rows</code> on <code>brace-check</code>, or <code>target_rows</code> over MCP — and it projects the <em>measured</em> freeze onto that count. A <code>CREATE INDEX</code> measured at <strong>7.5s</strong> on 10M rows projects to <strong>375s at 500M rows</strong> — still unsafe, and worse than the raw measurement let on.</p>
+
+      <p>The verdict then follows <code>effective_verdict</code>: measured <strong>or</strong> projected, whichever is worse. Two rules keep it honest:</p>
+      <ul>
+        <li>A projection can <strong>escalate</strong> a verdict — <span class="pill pill--green">safe</span> on the twin can become <span class="pill pill--red">unsafe</span> for your real table. That is what stops a small-twin measurement from reading as a false green light.</li>
+        <li>A projection can <strong>never soften</strong> one. A measured <span class="pill pill--red">unsafe</span> stays unsafe no matter what row count you supply.</li>
+      </ul>
+
+      <div class="callout">
+        <span class="callout__mark">assumption</span>
+        <p>The projection is a <strong>linear model</strong>, not a second measurement. It is clearly labelled as an assumption everywhere it appears, because it has not been validated across arbitrary index types, fill factors, or hardware — and it will be wrong in ways a real crash test at your actual scale would not be.</p>
+      </div>
+    </section>
+
+    <!-- ══ 06 · THE WEB LAB (+ three ways) ══════════════════════ -->
+    <section class="doc-sec reveal" id="usage" data-title="The web lab">
+      <p class="eyebrow">Using it</p>
+      <h2>Three ways to run a rehearsal.</h2>
+      <p class="doc-lede">The same engine answers the same question — "will this migration hurt?" — whether a human, a CI pipeline, or an AI agent is asking.</p>
+
+      <ul class="cards" aria-label="Three ways to run Brace">
+        <li><a class="card" href="#usage">
+          <span class="card__go"><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M6 3l5 5-5 5"/></svg></span>
+          <span class="card__ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="15" rx="2"/><path d="M3 9h18M6.5 6.5h.01M9 6.5h.01"/></svg></span>
+          <span class="card__no">01</span>
+          <span class="card__title">Web lab</span>
+          <span class="card__desc">Paste a migration or pick a preset and watch it crash live. No account.</span>
+          <span class="card__where"><code>lab.html</code></span>
+        </a></li>
+        <li><a class="card" href="#cli">
+          <span class="card__go"><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M6 3l5 5-5 5"/></svg></span>
+          <span class="card__ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/></svg></span>
+          <span class="card__no">02</span>
+          <span class="card__title">CLI deploy-gate</span>
+          <span class="card__desc">An exit code that blocks the merge when a migration is unsafe.</span>
+          <span class="card__where"><code>brace-check</code> · CI</span>
+        </a></li>
+        <li><a class="card" href="#mcp">
+          <span class="card__go"><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M6 3l5 5-5 5"/></svg></span>
+          <span class="card__ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="7" width="16" height="13" rx="3"/><path d="M12 3v4M8.5 12.5h.01M15.5 12.5h.01M9 16.5h6"/></svg></span>
+          <span class="card__no">03</span>
+          <span class="card__title">MCP verb</span>
+          <span class="card__desc">A coding agent asks "will this hurt?" before it ships a schema change.</span>
+          <span class="card__where"><code>mcp/server.py</code></span>
+        </a></li>
+      </ul>
+
+      <h3>The web lab</h3>
+      <p>Paste a migration, or pick a preset, and watch it crash. The write-rate chart collapses live as the lock lands, and a report card lands the moment the twin stops moving: freeze duration, casualties by label, the exact lock mode taken, and — on an unsafe verdict — a safe rewrite that has already been rehearsed, not just recommended. No account, no login.</p>
+      <div class="dochero__cta" style="margin-top:var(--s5)">
+        <a class="btn btn--primary" href="lab.html">Enter the lab <span aria-hidden="true">→</span></a>
+      </div>
+    </section>
+
+    <!-- ══ 07 · CLI DEPLOY-GATE ═════════════════════════════════ -->
+    <section class="doc-sec reveal" id="cli" data-title="CLI deploy-gate">
+      <p class="eyebrow">Using it · CI</p>
+      <h2>The <code>brace-check</code> deploy-gate.</h2>
       <p>Rehearse a migration inside your pipeline and let the exit code block the merge. <code>brace-check</code> exits non-zero when a migration is unsafe, so a dangerous statement can't reach the default branch. The exit code is a strict contract:</p>
+
       <div class="doc-code">
         <div class="doc-code__cap"><b>exit-code contract</b></div>
 <pre>brace-check -f migration.sql
@@ -230,204 +521,252 @@ CREATE INDEX CONCURRENTLY idx_orders_email ON orders (email);</pre>
 <span class="c"># project the measured freeze onto your real table size:</span>
 brace-check -target-rows 500000000 -f migration.sql</pre>
       </div>
-      <p>The exit code follows <code>effective_verdict</code> — measured <em>or</em> projected, whichever is worse — so a statement that was borderline on the 10M-row twin fails the gate once you tell it the table is 50× bigger.</p>
-    </li>
-    <li class="mode">
-      <div class="mode__head">
-        <span class="mode__no">03</span>
-        <span class="mode__name">MCP verb</span>
-        <span class="mode__where">mcp/server.py · FastMCP, stdio</span>
-      </div>
-      <p>A local AI assistant — Claude Code, Cursor, or any MCP client — can call Brace directly. An agent that writes a migration in seconds should be able to ask "will this hurt?" in the same breath, against a real production-scale rehearsal rather than a linter's guess.</p>
+      <p>The exit code follows <code>effective_verdict</code> — measured <em>or</em> projected, whichever is worse — so a statement that was borderline on the 10M-row twin fails the gate once you tell it the table is 50× bigger. Run a linter on every commit; run this before the migration touches production.</p>
+    </section>
+
+    <!-- ══ 08 · MCP VERB ════════════════════════════════════════ -->
+    <section class="doc-sec reveal" id="mcp" data-title="MCP verb">
+      <p class="eyebrow">Using it · agents</p>
+      <h2>The MCP verb an agent calls.</h2>
+      <p>A local AI assistant — Claude Code, Cursor, or any MCP client — can call Brace directly. An agent that writes a migration in seconds should be able to ask "will this hurt?" in the same breath, against a real production-scale rehearsal rather than a linter's guess. Run <code>mcp/server.py</code> (FastMCP, over stdio) and expose one verb:</p>
+
       <div class="doc-code">
         <div class="doc-code__cap"><b>the verb an agent calls</b></div>
-<pre>check_migration(sql, target_rows=0)
-<span class="c"># returns the same verdict / casualties / suggestion the web lab shows,</span>
-<span class="c"># as JSON — so the agent can refuse to ship a locking migration.</span></pre>
+<pre>check_migration(sql, target_rows=0, hostile=false)
+<span class="c"># returns JSON the agent can branch on:</span>
+<span class="c">#   effective_verdict  → "SAFE" | "UNSAFE"  (measured or projected, worst-of)</span>
+<span class="c">#   qualifier          → e.g. acquisition_not_simulated</span>
+<span class="c">#   note               → the plain-English explanation</span>
+<span class="c">#   contention         → whether hostile mode's hold actually engaged</span>
+<span class="c"># — so the agent can refuse to ship a locking migration.</span></pre>
       </div>
-    </li>
-  </ol>
-</section>
+      <p>It returns the same verdict, casualties and suggested rewrite the web lab shows — as JSON — so a coding agent can gate its own output the way CI gates a human's.</p>
 
-<!-- ══ 04 · HOSTILE MODE ══════════════════════════════════════ -->
-<section class="doc-sec reveal" id="hostile" data-chapter="Hostile mode">
-  <p class="eyebrow">Hostile mode</p>
-  <h2>Measuring the freeze a fast statement <em>would</em> cause.</h2>
+      <h3>Connect it to your agent</h3>
+      <p>The fastest path needs <b>nothing installed</b> — Brace runs a hosted MCP endpoint on Zerops. Any MCP-capable agent (Claude Code, Cursor, Windsurf, Cline, Codex) connects by URL:</p>
+      <div class="doc-code">
+        <div class="doc-code__cap"><b>remote — connect by URL, no clone</b></div>
+<pre>claude mcp add --transport http brace https://mcp-2a61-8080.prg1.zerops.app/mcp</pre>
+      </div>
+      <p>Agents that speak only stdio (e.g. some Codex/Cursor setups) reach the same hosted endpoint through the <code>mcp-remote</code> bridge — for Codex, in <code>~/.codex/config.toml</code>:</p>
+      <div class="doc-code">
+        <div class="doc-code__cap"><b>stdio agents — bridge to the hosted endpoint</b></div>
+<pre><span class="c"># Codex — ~/.codex/config.toml</span>
+[mcp_servers.brace]
+command = "npx"
+args = ["-y", "mcp-remote", "https://mcp-2a61-8080.prg1.zerops.app/mcp"]</pre>
+      </div>
+      <p>Or run it locally against your own database — clone the repo and point it at your Postgres (this is how you rehearse <em>your</em> data; see <a href="#byod">Bring your own data</a>):</p>
+      <div class="doc-code">
+        <div class="doc-code__cap"><b>local — stdio, your own lab</b></div>
+<pre>python3 -m venv mcp/.venv &amp;&amp; mcp/.venv/bin/pip install -r mcp/requirements.txt
+claude mcp add brace -- "$PWD/mcp/.venv/bin/python" "$PWD/mcp/server.py"
+<span class="c"># BRACE_API defaults to the public lab; set it to your own instance to use your data</span></pre>
+      </div>
+      <p>Then just ask your agent: <em>"use brace to check <code>CREATE INDEX idx_orders_email ON orders (email)</code> before I ship it — with hostile mode on."</em> It runs a real rehearsal and refuses to ship an outage.</p>
+    </section>
 
-  <p><strong class="lead-in">The problem it solves:</strong> some dangerous statements are dangerous only under contention. On an idle twin, a statement like <code>ALTER TABLE … ADD COLUMN</code> (with no default) acquires its <code>ACCESS EXCLUSIVE</code> lock instantly, does its work in milliseconds, and reports zero casualties. In production, that same statement has to <em>wait</em> for the lock — behind whatever transaction is already touching the table — and while it waits, every other write waits behind it.</p>
+    <!-- ══ 09 · BRING YOUR OWN DATA ═════════════════════════════ -->
+    <section class="doc-sec reveal" id="byod" data-title="Bring your own data">
+      <p class="eyebrow">Bring your own data · self-host</p>
+      <h2>Rehearse against your schema, not ours.</h2>
+      <p class="doc-lede">The public lab crashes every migration into one shared, synthetic 10M-row <code>orders</code> table — a good demo and a weak rehearsal. The migration you are actually afraid of meets <em>your</em> indexes, <em>your</em> row widths and <em>your</em> traffic. A self-hosted Brace points at a restored production dump instead, with two environment variables and no code changes. This is a first-class capability, not a footnote.</p>
 
-  <p>Hostile mode holds a transaction open on the twin so the migration's lock <strong>acquisition</strong> has to queue, exactly as it would in production. The freeze that would otherwise be assumed is now measured. Concretely: a fast <code>ADD COLUMN</code> can be <span class="pill pill--green">safe</span> when it runs alone, yet freeze writes for roughly <strong>2 seconds</strong> once it has to line up behind a single open transaction — long enough to start killing writers.</p>
+      <!-- worked example -->
+      <div class="wex" aria-labelledby="wex-t">
+        <div class="wex__head">
+          <span class="wex__tag">worked example</span>
+          <span class="wex__title" id="wex-t">A real SaaS billing schema — not the demo table</span>
+        </div>
+        <div class="wex__body">
+          <p>Suppose the database you are actually afraid of is a billing system: <code>accounts</code>, <code>invoices</code>, <code>sessions</code> — real production types, not toy integers. A <code>uuid</code> primary key, a <code>jsonb</code> line-items blob, a <code>numeric(12,2)</code> amount, an <code>inet</code> last-login address, a <code>text[]</code> of tags. Roughly <strong>1.2M rows</strong> of invoices. You point a self-hosted Brace at a restored dump of it and rehearse the exact index you were about to add in production.</p>
 
-  <div class="callout">
-    <span class="callout__mark">when to use</span>
-    <p>Turn it on for fast DDL whose real risk is the wait for the lock, not the work under it — most <code>ALTER TABLE</code> shape changes. Leave it off for statements that already do heavy work under the lock (a table rewrite, a full index build): those freeze on their own, and the measurement is honest without help.</p>
-  </div>
-</section>
+          <div class="doc-code">
+            <div class="doc-code__cap"><b>the schema Brace is pointed at</b></div>
+<pre><span class="c">-- your restored production dump, loaded as brace_template</span>
+CREATE TABLE invoices (
+  id           <span class="k">uuid</span>          PRIMARY KEY DEFAULT gen_random_uuid(),
+  account_id   <span class="k">uuid</span>          NOT NULL,
+  amount_cents <span class="k">numeric(12,2)</span> NOT NULL,
+  line_items   <span class="k">jsonb</span>         NOT NULL DEFAULT '[]',
+  tags         <span class="k">text[]</span>,
+  last_ip      <span class="k">inet</span>,
+  created_at   <span class="k">timestamptz</span>   NOT NULL DEFAULT now()
+);   <span class="c">-- ~1.2M rows; accounts + sessions alongside</span></pre>
+          </div>
 
-<!-- ══ 05 · SCALE PROJECTION ══════════════════════════════════ -->
-<section class="doc-sec reveal" id="scale" data-chapter="Scale projection">
-  <p class="eyebrow">Scale projection</p>
-  <h2>The twin is a sample of your database, not your database.</h2>
+          <p>Two variables switch Brace off the synthetic seed and onto your own tables and traffic — nothing else changes:</p>
+          <div class="doc-code">
+            <div class="doc-code__cap"><b>point it at your data</b></div>
+<pre>BRACE_SEED: "off"                 <span class="c"># use the restored template as-is; never seed</span>
+BRACE_LOAD_LABELS: >-             <span class="c"># describe your real write mix</span>
+  checkout:3:INSERT INTO invoices (account_id, amount_cents)
+    VALUES (gen_random_uuid(), $1 % 90000 + $2 * 0);
+  touch:2:UPDATE sessions SET last_seen = now() WHERE id = $1 % 50 AND $2 &gt; 0</pre>
+          </div>
 
-  <p><strong class="lead-in">The key fact:</strong> whether a statement takes a blocking lock does not depend on table size — but <em>how long</em> it holds that lock does, because the work under the lock (a rewrite, a full index build) scales with row count. So a 10M-row twin can measure a freeze too short to call unsafe, while the same statement against a 500M-row production table would be an outage.</p>
+          <p>Now rehearse the naive index you were about to ship — a plain <code>CREATE INDEX</code> on <code>invoices (account_id)</code>. On your 1.2M-row twin, under your own <code>checkout</code> and <code>touch</code> traffic, it holds its <code>SHARE</code> lock and freezes writes; then the scale projection warns what the same statement does to the full table:</p>
 
-  <p>Brace's answer is a projection, not a bigger twin. Tell it your real row count — <code>BRACE_TARGET_ROWS</code> in the web lab, <code>-target-rows</code> on <code>brace-check</code>, or <code>target_rows</code> over MCP — and it projects the <em>measured</em> freeze onto that count. A <code>CREATE INDEX</code> measured at <strong>7.5s</strong> on 10M rows projects to <strong>375s at 500M rows</strong> — still unsafe, and worse than the raw measurement let on.</p>
+          <div class="doc-code">
+            <div class="doc-code__cap"><b>the report, on your schema</b></div>
+<pre>CREATE INDEX idx_invoices_account ON invoices (account_id);
 
-  <p>The verdict then follows <code>effective_verdict</code>: measured <strong>or</strong> projected, whichever is worse. Two rules keep it honest:</p>
-  <ul>
-    <li>A projection can <strong>escalate</strong> a verdict — <span class="pill pill--green">safe</span> on the twin can become <span class="pill pill--red">unsafe</span> for your real table. That is what stops a small-twin measurement from reading as a false green light.</li>
-    <li>A projection can <strong>never soften</strong> one. A measured <span class="pill pill--red">unsafe</span> stays unsafe no matter what row count you supply.</li>
-  </ul>
+<span class="c">verdict            = UNSAFE</span>
+<span class="c">blocked            = 4.2s        (measured, on 1.2M rows)</span>
+<span class="c">casualties         = 63         by_label=map[checkout:58 touch:5]</span>
+<span class="c">effective_verdict  = UNSAFE     projected 18s at 100M rows</span></pre>
+          </div>
 
-  <div class="callout">
-    <span class="callout__mark">assumption</span>
-    <p>The projection is a <strong>linear model</strong>, not a second measurement. It is clearly labelled as an assumption everywhere it appears, because it has not been validated across arbitrary index types, fill factors, or hardware — and it will be wrong in ways a real crash test at your actual scale would not be.</p>
-  </div>
-</section>
+          <div class="wex__grid" aria-hidden="false">
+            <div class="wex__cell"><b>Twin</b><span>1.2M rows · your dump</span></div>
+            <div class="wex__cell"><b>Measured freeze</b><span class="crash">4.2s</span></div>
+            <div class="wex__cell"><b>Writes killed</b><span class="crash">63</span></div>
+            <div class="wex__cell"><b>Projected · 100M</b><span class="warn">18s outage</span></div>
+          </div>
 
-<!-- ══ 06 · BRING YOUR OWN DATA ═══════════════════════════════ -->
-<section class="doc-sec reveal" id="byod" data-chapter="Bring your own data">
-  <p class="eyebrow">Bring your own data · self-host</p>
-  <h2>Rehearse against your schema, not ours.</h2>
-  <p class="doc-lede">The public lab crashes every migration into one shared, synthetic 10M-row <code>orders</code> table — a good demo and a weak rehearsal. The migration you are actually afraid of meets <em>your</em> indexes, <em>your</em> row widths and <em>your</em> traffic. A self-hosted Brace points at a restored production dump instead, with two environment variables and no code changes.</p>
+          <p>Your schema, your row widths, your traffic — the migration you are actually afraid of, measured on a throwaway copy of it. The numbers here are representative of a self-hosted run against a foreign schema, not a claim about the shared public lab.</p>
+        </div>
+      </div>
 
-  <h3>Stand it up</h3>
-  <p>One <code>import.yml</code> stands up all three services on your own Zerops project — <code>web</code> (static), <code>api</code> (Go engine), and <code>db</code> (PostgreSQL 16). Brace needs a Postgres it <strong>owns</strong>: it creates and drops databases on every run, so don't point it at a server anything else depends on.</p>
+      <h3>Stand it up</h3>
+      <p>One <code>import.yml</code> stands up all three services on your own Zerops project — <code>web</code> (static), <code>api</code> (Go engine), and <code>db</code> (PostgreSQL 16). Brace needs a Postgres it <strong>owns</strong>: it creates and drops databases on every run, so don't point it at a server anything else depends on.</p>
 
-  <h3>Restore your dump as the template</h3>
-  <p>Every disposable twin is cloned from a database named <code>brace_template</code> — the name is fixed, because the twin pool, the orphan sweep and the boot check all agree on it.</p>
-  <div class="doc-code">
-    <div class="doc-code__cap"><b>step 1 — the template</b></div>
+      <h3>Restore your dump as the template</h3>
+      <p>Every disposable twin is cloned from a database named <code>brace_template</code> — the name is fixed, because the twin pool, the orphan sweep and the boot check all agree on it.</p>
+      <div class="doc-code">
+        <div class="doc-code__cap"><b>step 1 — the template</b></div>
 <pre>createdb  -U &lt;superuser&gt; brace_template
 pg_restore -U &lt;superuser&gt; -d brace_template your-dump.dump</pre>
-  </div>
-  <p>Every warm twin is a full physical copy of the template, so trim it before you restore if you can — roughly 80 seconds of clone time per gigabyte. Only the tables named by your migration and your load statements have to be realistic.</p>
+      </div>
+      <p>Every warm twin is a full physical copy of the template, so trim it before you restore if you can — roughly 80 seconds of clone time per gigabyte. Only the tables named by your migration and your load statements have to be realistic.</p>
 
-  <h3>Turn seeding off and describe your traffic</h3>
-  <p>Set <code>BRACE_SEED=off</code> so Brace uses the restored template as-is instead of appending synthetic rows, and describe your write mix with <code>BRACE_LOAD_LABELS</code>: semicolon-separated <code>name:weight:statement</code> triples.</p>
-  <div class="doc-code">
-    <div class="doc-code__cap"><b>step 2 — seeding off, traffic described</b></div>
-<pre>BRACE_SEED: "off"
-BRACE_LOAD_LABELS: >-
-  checkout:3:INSERT INTO invoices (customer_id, cents) VALUES ($1, $2);
-  login:2:UPDATE sessions SET last_seen = now() WHERE id = $1 % 50 AND $2 > 0</pre>
-  </div>
-  <ul>
-    <li><strong>name</strong> — non-empty, no whitespace, unique. It becomes a key in <code>casualties.by_label</code> and a series on the dashboard.</li>
-    <li><strong>weight</strong> — an integer &gt; 0; the relative share of write traffic.</li>
-    <li><strong>statement</strong> — one statement that must bind <strong>both <code>$1</code> and <code>$2</code></strong> and nothing higher. Every write binds exactly two bigints, and Postgres rejects a statement that declares fewer. If your second value is genuinely unused, give it a harmless home: <code>… WHERE id = $1 AND $2 &gt; 0</code>.</li>
-  </ul>
-  <p>At boot, Brace clones a twin and runs <strong>each</strong> label statement against it exactly once. A typo'd table name fails startup with the label name, the SQLSTATE and the statement — because a config that boots but never lands a write would report zero casualties, and zero casualties would look exactly like good news.</p>
+      <h3>Turn seeding off and describe your traffic</h3>
+      <p>Set <code>BRACE_SEED=off</code> so Brace uses the restored template as-is instead of appending synthetic rows, and describe your write mix with <code>BRACE_LOAD_LABELS</code>: semicolon-separated <code>name:weight:statement</code> triples.</p>
+      <ul>
+        <li><strong>name</strong> — non-empty, no whitespace, unique. It becomes a key in <code>casualties.by_label</code> and a series on the dashboard.</li>
+        <li><strong>weight</strong> — an integer &gt; 0; the relative share of write traffic.</li>
+        <li><strong>statement</strong> — one statement that must bind <strong>both <code>$1</code> and <code>$2</code></strong> and nothing higher. Every write binds exactly two bigints, and Postgres rejects a statement that declares fewer. If your second value is genuinely unused, give it a harmless home: <code>… WHERE id = $1 AND $2 &gt; 0</code>.</li>
+      </ul>
+      <p>At boot, Brace clones a twin and runs <strong>each</strong> label statement against it exactly once. A typo'd table name fails startup with the label name, the SQLSTATE and the statement — because a config that boots but never lands a write would report zero casualties, and zero casualties would look exactly like good news.</p>
 
-  <h3>The privilege model</h3>
-  <p>Brace has exactly one security boundary, and it is worth knowing where it sits before you hand it a production schema. Two unprivileged roles, each with a fresh random password generated at every process start:</p>
-  <ul>
-    <li><strong><code>brace_migrator</code></strong> runs the migration under test. It is <code>LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS</code>, owning nothing outside the disposable twin. Postgres itself — not application code — refuses <code>COPY … FROM PROGRAM</code>, server-side file reads and <code>DROP DATABASE</code> for that role.</li>
-    <li><strong><code>brace_traffic</code></strong> runs your load statements, with the least privilege the writes need and nothing more: <code>SELECT, INSERT, UPDATE</code> on existing public tables, never <code>DELETE</code>, <code>TRUNCATE</code>, <code>CREATE</code> or ownership. A CHECK constraint or column default is evaluated as the session that <em>writes</em> the row, so running traffic unprivileged is what stops a smuggled expression from firing as superuser.</li>
-  </ul>
-  <div class="callout">
-    <span class="callout__mark">your data</span>
-    <p>Brace runs inside your own infrastructure and the restored template is never written to — with <code>BRACE_SEED=off</code>, boot only reads its catalog, and every run gets a fresh twin that is dropped when the run ends. <strong>Your data never leaves your infrastructure.</strong></p>
-  </div>
-</section>
+      <h3>The privilege model</h3>
+      <p>Brace has exactly one security boundary, and it is worth knowing where it sits before you hand it a production schema. Two unprivileged roles, each with a fresh random password generated at every process start:</p>
+      <ul>
+        <li><strong><code>brace_migrator</code></strong> runs the migration under test. It is <code>LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS</code>, owning nothing outside the disposable twin. Postgres itself — not application code — refuses <code>COPY … FROM PROGRAM</code>, server-side file reads and <code>DROP DATABASE</code> for that role.</li>
+        <li><strong><code>brace_traffic</code></strong> runs your load statements, with the least privilege the writes need and nothing more: <code>SELECT, INSERT, UPDATE</code> on existing public tables, never <code>DELETE</code>, <code>TRUNCATE</code>, <code>CREATE</code> or ownership. A CHECK constraint or column default is evaluated as the session that <em>writes</em> the row, so running traffic unprivileged is what stops a smuggled expression from firing as superuser.</li>
+      </ul>
+      <div class="callout">
+        <span class="callout__mark">your data</span>
+        <p>Brace runs inside your own infrastructure and the restored template is never written to — with <code>BRACE_SEED=off</code>, boot only reads its catalog, and every run gets a fresh twin that is dropped when the run ends. <strong>Your data never leaves your infrastructure.</strong></p>
+      </div>
+    </section>
 
-<!-- ══ 07 · API REFERENCE ═════════════════════════════════════ -->
-<section class="doc-sec reveal" id="api" data-chapter="API reference">
-  <p class="eyebrow">API reference</p>
-  <h2>The public HTTP surface.</h2>
-  <p class="doc-lede">Everything the web lab shows is available over plain HTTP — the CLI and the MCP verb are thin clients over these same endpoints.</p>
+    <!-- ══ 10 · API REFERENCE ═══════════════════════════════════ -->
+    <section class="doc-sec reveal" id="api" data-title="API reference">
+      <p class="eyebrow">API reference</p>
+      <h2>The public HTTP surface.</h2>
+      <p class="doc-lede">Everything the web lab shows is available over plain HTTP — the CLI and the MCP verb are thin clients over these same endpoints.</p>
 
-  <div class="api">
-    <div class="api-row">
-      <div class="api-sig"><span class="api-verb api-verb--post">post</span><span class="api-path">/api/run</span></div>
-      <p class="api-desc">Rehearse one migration. Body: <code>{ sql, mode?, target_rows?, hostile? }</code> (a run takes ten seconds, so the call does not hold the request open). Returns <code>202 { run_id }</code> on admission, or a <code>4xx</code> / <code>503</code> with a reason when the statement is rejected or no twin is warm yet. The completed report card — verdict, effective verdict, freeze, casualties by label, lock modes, any scale projection, and (on unsafe) a suggested rewrite — is read back from <code>GET /api/stats</code> as <code>last_run</code>, and pushed live over <code>GET /api/stream</code>.</p>
-    </div>
-    <div class="api-row">
-      <div class="api-sig"><span class="api-verb api-verb--get">get</span><span class="api-path">/api/status</span></div>
-      <p class="api-desc">Engine and template state: whether a run is in progress, the warm-twin pool, and the loaded template's row count and size. Answers <code>{"error":"starting"}</code> until the template is warm.</p>
-    </div>
-    <div class="api-row">
-      <div class="api-sig"><span class="api-verb api-verb--get">get</span><span class="api-path">/api/stats</span></div>
-      <p class="api-desc">The current live frame — writes/sec, casualties, the running twin — plus <code>last_run</code>, the most recent completed report card.</p>
-    </div>
-    <div class="api-row">
-      <div class="api-sig"><span class="api-verb api-verb--get">get</span><span class="api-path">/api/history</span></div>
-      <p class="api-desc">The recent run ledger, newest first — an array of past report cards (optional <code>?limit=</code>).</p>
-    </div>
-    <div class="api-row">
-      <div class="api-sig"><span class="api-verb api-verb--get">get</span><span class="api-path">/api/report/{id}</span></div>
-      <p class="api-desc">A single run's full report card by id — the same shape as one row of <code>/api/history</code>.</p>
-    </div>
-    <div class="api-row">
-      <div class="api-sig"><span class="api-verb api-verb--get">get</span><span class="api-path">/healthz</span></div>
-      <p class="api-desc">Liveness probe. Returns <code>ok</code> the moment the listener is up — deliberately dumber than readiness, so a platform can't kill the container mid-seed.</p>
-    </div>
-  </div>
-  <p>There is also <code>GET /api/stream</code>, a Server-Sent Events feed of the same stats frames, which is what drives the live chart in the web lab.</p>
-</section>
+      <div class="api">
+        <div class="api-row">
+          <div class="api-sig"><span class="api-verb api-verb--post">post</span><span class="api-path">/api/run</span></div>
+          <p class="api-desc">Rehearse one migration. Body: <code>{ sql, mode?, target_rows?, hostile? }</code>. A run takes about ten seconds, so the call does not hold the request open: it returns <code>202 { run_id }</code> on admission, or a <code>4xx</code> / <code>503</code> with a reason when the statement is rejected or no twin is warm yet. The completed report card is read back from <code>GET /api/stats</code> as <code>last_run</code>, and pushed live over the SSE stream.</p>
+        </div>
+        <div class="api-row">
+          <div class="api-sig"><span class="api-verb api-verb--get">get</span><span class="api-path">/api/stats</span></div>
+          <p class="api-desc">The current live frame — writes/sec, casualties, the running twin — plus <code>last_run</code>, the most recent completed report card (verdict, effective verdict, freeze, casualties by label, lock modes, any scale projection, and on unsafe a suggested rewrite).</p>
+        </div>
+        <div class="api-row">
+          <div class="api-sig"><span class="api-verb api-verb--get">get</span><span class="api-path">/api/stream</span></div>
+          <p class="api-desc">A Server-Sent Events feed of the same stats frames — this is what drives the live write-rate chart in the web lab.</p>
+        </div>
+        <div class="api-row">
+          <div class="api-sig"><span class="api-verb api-verb--get">get</span><span class="api-path">/api/status</span></div>
+          <p class="api-desc">Engine and template state: whether a run is in progress, the warm-twin pool, and the loaded template's row count and size. Answers <code>{"error":"starting"}</code> until the template is warm.</p>
+        </div>
+        <div class="api-row">
+          <div class="api-sig"><span class="api-verb api-verb--get">get</span><span class="api-path">/api/history</span></div>
+          <p class="api-desc">The recent run ledger, newest first — an array of past report cards (optional <code>?limit=</code>).</p>
+        </div>
+        <div class="api-row">
+          <div class="api-sig"><span class="api-verb api-verb--get">get</span><span class="api-path">/api/report/{id}</span></div>
+          <p class="api-desc">A single run's full report card by id — the same shape as one row of <code>/api/history</code>.</p>
+        </div>
+        <div class="api-row">
+          <div class="api-sig"><span class="api-verb api-verb--get">get</span><span class="api-path">/healthz</span></div>
+          <p class="api-desc">Liveness probe. Returns <code>ok</code> the moment the listener is up — deliberately dumber than readiness, so a platform can't kill the container mid-seed.</p>
+        </div>
+      </div>
+    </section>
 
-<!-- ══ 08 · HONEST LIMITATIONS ════════════════════════════════ -->
-<section class="doc-sec reveal" id="limits" data-chapter="Honest limitations">
-  <p class="eyebrow">Honest limitations</p>
-  <h2>Where the rehearsal stops matching reality.</h2>
-  <p class="doc-lede">Brace is a rehearsal, not a guarantee. The trust mechanic is naming exactly where it stops being true.</p>
+    <!-- ══ 11 · HONEST LIMITS ═══════════════════════════════════ -->
+    <section class="doc-sec reveal" id="limits" data-title="Honest limits">
+      <p class="eyebrow">Honest limits</p>
+      <h2>Where the rehearsal stops matching reality.</h2>
+      <p class="doc-lede">Brace is a rehearsal, not a guarantee. The trust mechanic is naming exactly where it stops being true.</p>
 
-  <h3>Postgres only — on purpose</h3>
-  <p>Brace commits to one database's truth. Its entire mechanism is Postgres-specific: the lock ladder (<code>SHARE</code> / <code>ACCESS EXCLUSIVE</code> / <code>SHARE UPDATE EXCLUSIVE</code>), <code>lock_timeout</code> and the <code>55P03</code> error, and reading contention straight out of <code>pg_locks</code>. Other engines lock differently and would need a different engine, not a config flag. Doing one database exactly right beats doing several approximately.</p>
+      <h3>Postgres only — on purpose</h3>
+      <p>Brace commits to one database's truth. Its entire mechanism is Postgres-specific: the lock ladder (<code>SHARE</code> / <code>ACCESS EXCLUSIVE</code> / <code>SHARE UPDATE EXCLUSIVE</code>), <code>lock_timeout</code> and the <code>55P03</code> error, and reading contention straight out of <code>pg_locks</code>. Other engines lock differently and would need a different engine, not a config flag. Doing one database exactly right beats doing several approximately.</p>
 
-  <h3>The twin is not your whole production system</h3>
-  <p>A twin is a single Postgres database under a synthetic write mix. It does not model read replicas and replication lag, autovacuum pressure, or a cold cache — all of which shape how a migration actually behaves in production. It proves the <em>mechanism</em> (a blocking lock kills waiting writers); it does not reproduce your specific traffic shape, pooling, or retry logic.</p>
+      <h3>The twin is not your whole production system</h3>
+      <p>A twin is a single Postgres database under a synthetic write mix. It does not model read replicas and replication lag, autovacuum pressure, or a cold cache — all of which shape how a migration actually behaves in production. It proves the <em>mechanism</em> (a blocking lock kills waiting writers); it does not reproduce your specific traffic shape, pooling, or retry logic.</p>
 
-  <h3>The projection is a linear model</h3>
-  <p>Scale projection multiplies a measured freeze by a row-count ratio. It has not been validated across arbitrary index types, fill factors, or hardware, and it is labelled an assumption wherever it appears — never a second measurement.</p>
+      <h3>The projection is a linear model</h3>
+      <p>Scale projection multiplies a measured freeze by a row-count ratio. It has not been validated across arbitrary index types, fill factors, or hardware, and it is labelled an assumption wherever it appears — never a second measurement.</p>
 
-  <h3>One statement at a time</h3>
-  <p>Brace measures a single DDL statement per run. Multi-statement migrations, transactional DDL blocks, and application-level coordination (dual writes, backfills, feature-flag cutover) are out of scope — each statement can be rehearsed on its own, but the sequencing between them is not.</p>
+      <h3>One statement at a time</h3>
+      <p>Brace measures a single DDL statement per run. Multi-statement migrations, transactional DDL blocks, and application-level coordination (dual writes, backfills, feature-flag cutover) are out of scope — each statement can be rehearsed on its own, but the sequencing between them is not.</p>
 
-  <h3>The public lab is synthetic</h3>
-  <p>Row values, timestamps and label statements in the stock seed are generated, not sampled from a real dataset, so planner behaviour can differ from a production table with real data skew even at the same row count. If that is what you're rehearsing, <a href="#byod">bring your own dump</a>.</p>
+      <h3>The public lab is synthetic</h3>
+      <p>Row values, timestamps and label statements in the stock seed are generated, not sampled from a real dataset, so planner behaviour can differ from a production table with real data skew even at the same row count. If that is what you're rehearsing, <a href="#byod">bring your own dump</a>.</p>
 
-  <h3>Two more honest edges</h3>
-  <ul>
-    <li><code>CREATE INDEX CONCURRENTLY</code> is reported <span class="pill pill--green">safe</span> for write-freeze purposes because it doesn't take the blocking lock — measured, not assumed. What Brace does <em>not</em> simulate is a <code>CONCURRENTLY</code> build failing partway and leaving an <code>INVALID</code> index that needs a manual retry.</li>
-    <li>The measured numbers on this page reflect one run on one hardware profile. Absolute seconds will differ elsewhere; the <em>relative</em> ordering is the part expected to generalize.</li>
-  </ul>
-</section>
+      <h3>Two more honest edges</h3>
+      <ul>
+        <li><code>CREATE INDEX CONCURRENTLY</code> is reported <span class="pill pill--green">safe</span> for write-freeze purposes because it doesn't take the blocking lock — measured, not assumed. What Brace does <em>not</em> simulate is a <code>CONCURRENTLY</code> build failing partway and leaving an <code>INVALID</code> index that needs a manual retry.</li>
+        <li>The measured numbers on this page reflect one run on one hardware profile. Absolute seconds will differ elsewhere; the <em>relative</em> ordering is the part expected to generalize.</li>
+      </ul>
+    </section>
 
-<!-- ══ 09 · WHY ZEROPS ════════════════════════════════════════ -->
-<section class="doc-sec reveal" id="zerops" data-chapter="Why Zerops">
-  <p class="eyebrow">Why Zerops</p>
-  <h2>What Brace needs from its infrastructure.</h2>
+    <!-- ══ 12 · WHY ZEROPS ══════════════════════════════════════ -->
+    <section class="doc-sec reveal" id="zerops" data-title="Why Zerops">
+      <p class="eyebrow">Why Zerops</p>
+      <h2>What Brace needs from its infrastructure.</h2>
 
-  <p><strong class="lead-in">The hard requirement:</strong> Brace needs a Postgres it is <strong>superuser</strong> on. It creates and drops twin databases on every single run, and it clones them with native <code>CREATE DATABASE … TEMPLATE</code> — and most managed Postgres offerings allow neither. That is exactly what <a href="https://zerops.io" target="_blank" rel="noopener noreferrer">Zerops</a> hands you natively, rather than hiding it.</p>
+      <p><strong class="lead-in">The hard requirement:</strong> Brace needs a Postgres it is <strong>superuser</strong> on. It creates and drops twin databases on every single run, and it clones them with native <code>CREATE DATABASE … TEMPLATE</code> — and most managed Postgres offerings allow neither. That is exactly what <a href="https://zerops.io" target="_blank" rel="noopener noreferrer">Zerops</a> hands you natively, rather than hiding it.</p>
 
-  <p>Around that, Brace uses three more things Zerops provides directly:</p>
-  <ul>
-    <li>A <strong>Go runtime</strong> for the engine that orchestrates the clone, the load, and the measurement.</li>
-    <li><strong>Private networking</strong> between <code>web</code>, <code>api</code> and <code>db</code>, so the superuser DSN never leaves the private network and is never checked into git.</li>
-    <li><strong>One-file self-host</strong> — a single <code>import.yml</code> stands up all three services, which is what makes bring-your-own-data a two-variable change instead of a fork.</li>
-  </ul>
+      <p>Around that, Brace uses three more things Zerops provides directly:</p>
+      <ul>
+        <li>A <strong>Go runtime</strong> for the engine that orchestrates the clone, the load, and the measurement.</li>
+        <li><strong>Private networking</strong> between <code>web</code>, <code>api</code> and <code>db</code>, so the superuser DSN never leaves the private network and is never checked into git.</li>
+        <li><strong>One-file self-host</strong> — a single <code>import.yml</code> stands up all three services, which is what makes bring-your-own-data a two-variable change instead of a fork.</li>
+      </ul>
 
-  <div class="callout">
-    <span class="callout__mark">not lock-in</span>
-    <p>None of this is proprietary. Brace is standard Go and PostgreSQL 16 with no vendor APIs, so it runs anywhere those two do. Zerops is where it is <em>easy</em>, not where it is <em>trapped</em>.</p>
-  </div>
-</section>
+      <div class="callout">
+        <span class="callout__mark">not lock-in</span>
+        <p>None of this is proprietary. Brace is standard Go and PostgreSQL 16 with no vendor APIs, so it runs anywhere those two do. Zerops is where it is <em>easy</em>, not where it is <em>trapped</em>.</p>
+      </div>
+    </section>
 
-</article>
+    <!-- close -->
+    <section class="docclose reveal">
+      <h2>Bring your own migration.</h2>
+      <p>Paste the one you are nervous about. It runs on a dummy, not on your users.</p>
+      <div class="docclose__cta">
+        <a class="btn btn--primary" href="lab.html">Open the lab <span aria-hidden="true">→</span></a>
+        <a class="btn btn--ghost" href="index.html">Back to the overview <span aria-hidden="true">→</span></a>
+      </div>
+    </section>
+
+  </article>
+  </main>
+
+  <!-- ══ ON THIS PAGE ═════════════════════════════════════════ -->
+  <nav class="dxtoc" id="dxtoc" aria-label="On this page">
+    <p class="dxtoc__label">On this page</p>
+    <ol id="tocList"></ol>
+  </nav>
+
 </div>
-
-<!-- ══ CLOSE ══════════════════════════════════════════════════ -->
-<section class="docclose reveal">
-  <h2>Bring your own migration.</h2>
-  <p>Paste the one you are nervous about. It runs on a dummy, not on your users.</p>
-  <div class="docclose__cta">
-    <a class="btn btn--primary" href="lab.html">Open the lab <span aria-hidden="true">→</span></a>
-    <a class="btn btn--ghost" href="index.html">Back to the overview <span aria-hidden="true">→</span></a>
-  </div>
-</section>
-
-</main>
 
 <footer class="foot">
   <span>Every crash happens on a throwaway twin. Nothing real is ever at risk.</span>
