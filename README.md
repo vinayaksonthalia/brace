@@ -22,38 +22,36 @@
   <a href="#quickstart">Deploy your own on Zerops</a>
 </p>
 
+<p align="center">
+  <img src="docs/img/crash.gif" alt="Brace lab: a naive CREATE INDEX crashing a live twin — write throughput collapsing to zero, casualties climbing" width="90%"><br>
+  <sub>A naive <code>CREATE INDEX</code>, live: writes crater to zero, the freeze timer runs, and the casualty count climbs — on a throwaway twin, not your users.</sub>
+</p>
+
 ---
 
 ## Same SQL, two fates
 
-Every migration below does the same thing to the schema. Only one of them is safe to run against a live table.
+A plain `CREATE INDEX` and the same index built `CONCURRENTLY` leave the database in an identical state. One is a half-minute outage; the other is invisible.
 
 ```sql
--- what most people ship
-ALTER TABLE orders ADD COLUMN discount_code text NOT NULL DEFAULT random()::text;
+-- what most people ship — takes a SHARE lock, freezes every write on the table
+CREATE INDEX idx_orders_customer_id ON orders (customer_id);
 ```
 
-Run that against Brace's 10M-row twin under live checkout/login/cart traffic and it holds an `ACCESS EXCLUSIVE` lock for the entire table rewrite. **31.0 seconds** of frozen writes. **480 writes** hit `lock_timeout` and died mid-checkout — real `55P03` errors, not a simulation of them.
+Run that against Brace's 10M-row twin under live checkout/login/cart traffic: **28.0 seconds** of frozen writes, **432 writes** died mid-checkout — real `55P03` (`lock_not_available`) errors, measured, not a simulation of them.
 
 ```sql
--- the rewrite Brace suggests
-ALTER TABLE orders ADD COLUMN discount_code text;
-UPDATE orders SET discount_code = random()::text;  -- batched, no lock held
-ALTER TABLE orders ALTER COLUMN discount_code SET NOT NULL;
+-- one word — no blocking lock, writes never stop
+CREATE INDEX CONCURRENTLY idx_orders_customer_id ON orders (customer_id);
 ```
 
-Same end state. Run it through the same twin, under the same traffic. **0.00 seconds** frozen. **0 writes** died.
+Same index, same twin, same traffic: **0.00 seconds** frozen, **0 writes** died.
 
-That contrast — measured, on a full-size twin, under real concurrent writes — is the whole product.
-
-<p align="center">
-  <img src="docs/img/crash-in-progress.png" alt="Brace lab mid-crash: write throughput visibly collapsing during the DDL" width="80%"><br>
-  <sub>The write-rate collapse, live, mid-run.</sub>
-</p>
+That contrast — measured, on a full-size twin, under real concurrent writes — is the whole product. Brace doesn't read your SQL and guess; it runs it and counts the bodies.
 
 <p align="center">
-  <img src="docs/img/crash-report-card.png" alt="Brace crash report: freeze duration, casualty count, and the safe rewrite" width="80%"><br>
-  <sub>The report card: freeze duration, casualties by label, and the suggested rewrite.</sub>
+  <img src="docs/img/report-unsafe.png" alt="Brace crash report: 28.0s freeze, 432 writes killed by label, measured two independent ways, with the plain-English explanation and the scale projection" width="62%"><br>
+  <sub>The report card, from that exact run — freeze measured two independent ways (28.0s / 28.0s), casualties by label, the lock explained in plain English, and the freeze projected onto a 100M-row table.</sub>
 </p>
 
 ## Why not just lint it
@@ -160,16 +158,25 @@ One run, 10M-row twin, ~12k writes/sec baseline, real Zerops hardware (`db`: ded
 | `ALTER TABLE ... ADD COLUMN ... NOT NULL DEFAULT random()` | 🔴 UNSAFE | 31.0s | 480 |
 | `ADD COLUMN z serial` *(looks harmless — isn't)* | 🔴 UNSAFE | 26.2s | 408 |
 | `ALTER COLUMN ... TYPE ...` | 🔴 UNSAFE | 20.5s | 312 |
-| `CREATE INDEX` (naive) | 🔴 UNSAFE | 15.8–20.5s | 240–312 |
+| `CREATE INDEX` (naive) | 🔴 UNSAFE | 7.5–28.0s | 144–432 |
 | `REINDEX INDEX` | 🔴 UNSAFE | 11.0s | 168 |
 | `CREATE INDEX CONCURRENTLY` | 🟢 SAFE | 0.00s | 0 |
 | `VACUUM ANALYZE` | 🟢 SAFE | 0s | 0 |
 
-Freeze duration is measured two independent ways — write-rate collapse in the load generator, and `pg_stat_activity` / `pg_locks` sampled every 250ms during the run — and they're expected to agree. A casualty is counted only for `SQLSTATE 55P03` (`lock_not_available`, PG16's `lock_timeout` error), never inferred from a slow response or a cancellation.
+Freeze duration is measured two independent ways — write-rate collapse in the load generator, and `pg_stat_activity` / `pg_locks` sampled every 250ms during the run — and they're expected to agree (the run pictured above measured 28.0s both ways). A casualty is counted only for `SQLSTATE 55P03` (`lock_not_available`, PG16's `lock_timeout` error), never inferred from a slow response or a cancellation. The public lab is a shared, single-vCPU-class box, so the *magnitude* varies run to run with load — the **verdict** is the finding, the decimal is not; the numbers here are real ledger entries across many runs.
 
 ### The projection, because the twin is a sample
 
 Lock *presence* doesn't depend on table size; lock *duration* does. A `CREATE INDEX` (naive) measured **7.5s** on the 10M-row twin projects to **375s at 500M rows** — still UNSAFE, and worse than the raw measurement suggests. Tell Brace your real table size — `BRACE_TARGET_ROWS` in the web lab, `-target-rows` on `brace-check`, `target_rows` over MCP — and the verdict follows `effective_verdict`: measured **or** projected, whichever is worse. This is what stops a small-twin measurement from reading as a false-safe.
+
+## Hostile mode — the freeze that only happens under contention
+
+Some migrations are dangerous not because they hold a lock for a long time, but because they have to *wait* for one behind a long-running transaction — and once an `ACCESS EXCLUSIVE` request is queued, every write that arrives after it queues too. A metadata-only `ALTER TABLE ... ADD COLUMN` is *instant* in isolation, so an idle rehearsal (and every linter) calls it safe. Tick **hostile mode** and Brace holds a real transaction open on the twin while the migration runs:
+
+- **off:** `ADD COLUMN foo int` → SAFE, 0.0s — with the qualifier `acquisition_not_simulated`, because the wait wasn't tested.
+- **on:** the same statement → **UNSAFE, ~2s frozen**, measured, because it queued behind the held transaction and every write queued behind it.
+
+This is the real-world lock-acquisition cascade — the outage pattern nobody else reproduces — turned into a measured number instead of a footnote. And it can't hand out a false green light: if the migration never actually had to wait (e.g. `ALTER INDEX ... RENAME`, which takes only `SHARE UPDATE EXCLUSIVE` and blocks nothing), the run says so rather than claiming a freeze it didn't cause.
 
 ## Three ways to use it
 
@@ -185,7 +192,7 @@ The MCP verb is the one that matters for Zerops' "infrastructure for coding agen
 
 Every verdict comes with a plain-English explanation, not just a number. Example, from the naive `CREATE INDEX`:
 
-> **UNSAFE** — this statement took an `ACCESS EXCLUSIVE`-adjacent lock for the duration of the index build. Writers queued behind it; 312 exceeded the 1.5s `lock_timeout` and were rolled back (`55P03`). **Suggestion:** `CREATE INDEX CONCURRENTLY` builds the same index without holding that lock — it costs roughly 2x the build time and can fail into an `INVALID` index that needs a manual retry, but it took 0 casualties in this lab.
+> **UNSAFE** — a plain `CREATE INDEX` takes a `SHARE` lock and holds it for the entire build. `SHARE` conflicts with `ROW EXCLUSIVE` — the lock every `INSERT`, `UPDATE` and `DELETE` takes — so for as long as the index is building, every write queues, and any write with a `lock_timeout` dies waiting (`55P03`). Reads are untouched (`SELECT` takes `ACCESS SHARE`, which doesn't conflict), which is why this outage looks like "the site is up but nothing saves." **Suggestion:** `CREATE INDEX CONCURRENTLY` builds the same index without that lock — it costs roughly 2x the build time and can fail into an `INVALID` index needing a manual retry, but it took 0 casualties in this lab.
 
 The point isn't the verdict — it's that the person reading it understands *why*, and has a rewrite that's already been rehearsed, not just recommended.
 
