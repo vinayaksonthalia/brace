@@ -155,6 +155,22 @@ document.documentElement.setAttribute('data-theme',t);})();</script>
     <textarea id="sql" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off"
       placeholder="-- paste your own migration&#10;ALTER TABLE orders ADD COLUMN ..."></textarea>
 
+    <!-- Hostile mode. An ACCESS EXCLUSIVE statement acquires its lock
+         instantly on an idle twin, so the freeze it would cause in
+         production is never measured — only assumed. This holds a
+         transaction open so the lock has to WAIT, turning the assumed
+         freeze into a measured one. The participatory "watch it die" beat. -->
+    <label class="hostile" for="hostileToggle">
+      <input type="checkbox" id="hostileToggle">
+      <span class="hostile__box" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 6.5"/></svg>
+      </span>
+      <span class="hostile__text">
+        <b>hostile mode</b>
+        <span>hold a transaction open so the lock-acquisition freeze is measured, not assumed</span>
+      </span>
+    </label>
+
     <div class="console__foot">
       <button type="button" class="run" id="runBtn">
         <span class="run__text">Run the crash test</span>
@@ -181,6 +197,10 @@ document.documentElement.setAttribute('data-theme',t);})();</script>
       <h2>crash report <span class="panel__scope">this run</span></h2>
       <span class="panel__note" id="reportNote">awaiting run</span>
     </header>
+    <!-- Transient notices (rejected SQL, rig busy, rate-limited, warming a
+         twin) render HERE, not in the body — so one fumbled paste never
+         evicts the last real crash report below it. -->
+    <div class="report__notice" id="reportNotice" hidden aria-live="polite"></div>
     <div class="report__body" id="reportBody" aria-live="polite">
       <!-- Empty state: the shape of the answer, unfilled. It tells you what
            you are about to be told, so the first run has nothing to decode. -->
@@ -252,7 +272,12 @@ document.documentElement.setAttribute('data-theme',t);})();</script>
 
 <template id="tpl-unsafe">
   <article class="card card--unsafe">
-    <div class="card__verdict"><span class="tag tag--red">unsafe</span><span class="card__id"></span></div>
+    <div class="card__verdict">
+      <span class="tag tag--red">unsafe</span>
+      <span class="qual" data-slot="qualChip" hidden>acquisition not simulated</span>
+      <span class="card__id"></span>
+    </div>
+    <p class="verdict-flip" data-slot="flip" hidden></p>
     <div class="metric metric--hero">
       <div class="metric__value" data-slot="freeze"></div>
       <div class="metric__label">write freeze — measured</div>
@@ -262,26 +287,63 @@ document.documentElement.setAttribute('data-theme',t);})();</script>
       <div class="metric__label">writes died on the twin — measured</div>
     </div>
     <ul class="mix" data-slot="mix"></ul>
+
+    <!-- two independent instruments corroborating the freeze -->
+    <div class="corr" data-slot="corroborate" hidden>
+      <span class="corr__tag">two instruments agree</span>
+      <div class="corr__rows">
+        <span class="corr__cell"><b data-slot="corrWps"></b><i>write-rate drop</i></span>
+        <span class="corr__cell"><b data-slot="corrLocks"></b><i>pg_locks, read directly</i></span>
+      </div>
+      <p class="corr__foot">The freeze was measured two independent ways and they agree.</p>
+    </div>
+
+    <!-- the teach layer: what it locks, and what to do next -->
+    <div class="teach" data-slot="teach" hidden>
+      <div class="teach__row" data-slot="explainRow" hidden>
+        <span class="teach__tag">what it locks <i class="teach__lock" data-slot="lockModes" hidden></i></span>
+        <p class="teach__prose" data-slot="explanation"></p>
+      </div>
+      <div class="teach__row" data-slot="noteRow" hidden>
+        <span class="teach__tag">what this run means</span>
+        <p class="teach__prose" data-slot="note"></p>
+      </div>
+    </div>
+
     <div class="diverge" data-slot="diverge" hidden></div>
     <div class="wreck" data-slot="wreckWrap" hidden>
       <span class="wreck__tag">wreckage left behind</span>
       <p class="wreck__text" data-slot="wreckText"></p>
     </div>
-    <div class="metric metric--proj">
+
+    <!-- projected impact — the engine's own scale_projection, or nothing -->
+    <div class="metric metric--proj" data-slot="projWrap" hidden>
       <div class="metric__value metric__value--mid" data-slot="projected"></div>
       <div class="metric__label">
-        at your production traffic
-        <button type="button" class="why" data-slot="whyBtn" aria-expanded="false">formula</button>
+        projected at scale — assumption, not measured
+        <button type="button" class="why" data-slot="whyBtn" aria-expanded="false">model</button>
       </div>
       <p class="formula" data-slot="formula" hidden></p>
     </div>
+
+    <!-- hostile mode: the held transaction that forced the freeze -->
+    <div class="contend" data-slot="contention" hidden>
+      <span class="contend__tag">hostile mode — contention held</span>
+      <p class="contend__text" data-slot="contendText"></p>
+    </div>
+
     <p class="card__foot" data-slot="duration"></p>
   </article>
 </template>
 
 <template id="tpl-safe">
   <article class="card card--safe">
-    <div class="card__verdict"><span class="tag tag--green">safe</span><span class="card__id"></span></div>
+    <div class="card__verdict">
+      <span class="tag tag--green">safe</span>
+      <span class="qual" data-slot="qualChip" hidden>acquisition not simulated</span>
+      <span class="card__id"></span>
+    </div>
+    <p class="verdict-flip" data-slot="flip" hidden></p>
     <div class="metric metric--hero">
       <div class="metric__value" data-slot="freeze">0.0s</div>
       <div class="metric__label">write freeze — measured</div>
@@ -291,10 +353,99 @@ document.documentElement.setAttribute('data-theme',t);})();</script>
       <li>traffic never dipped</li>
       <li>identical end state</li>
     </ul>
+
+    <!-- two independent instruments corroborating (present only if a freeze) -->
+    <div class="corr" data-slot="corroborate" hidden>
+      <span class="corr__tag">two instruments agree</span>
+      <div class="corr__rows">
+        <span class="corr__cell"><b data-slot="corrWps"></b><i>write-rate drop</i></span>
+        <span class="corr__cell"><b data-slot="corrLocks"></b><i>pg_locks, read directly</i></span>
+      </div>
+      <p class="corr__foot">The freeze was measured two independent ways and they agree.</p>
+    </div>
+
+    <!-- the teach layer: what it locks, and what this means -->
+    <div class="teach" data-slot="teach" hidden>
+      <div class="teach__row" data-slot="explainRow" hidden>
+        <span class="teach__tag">what it locks <i class="teach__lock" data-slot="lockModes" hidden></i></span>
+        <p class="teach__prose" data-slot="explanation"></p>
+      </div>
+      <div class="teach__row" data-slot="noteRow" hidden>
+        <span class="teach__tag">what this run means</span>
+        <p class="teach__prose" data-slot="note"></p>
+      </div>
+    </div>
+
     <div class="diverge" data-slot="diverge" hidden></div>
     <div class="wreck" data-slot="wreckWrap" hidden>
       <span class="wreck__tag">wreckage left behind</span>
       <p class="wreck__text" data-slot="wreckText"></p>
+    </div>
+
+    <!-- projected at scale, only if the engine made one -->
+    <div class="metric metric--proj" data-slot="projWrap" hidden>
+      <div class="metric__value metric__value--mid" data-slot="projected"></div>
+      <div class="metric__label">
+        projected at scale — assumption, not measured
+        <button type="button" class="why" data-slot="whyBtn" aria-expanded="false">model</button>
+      </div>
+      <p class="formula" data-slot="formula" hidden></p>
+    </div>
+
+    <div class="contend" data-slot="contention" hidden>
+      <span class="contend__tag">hostile mode — contention held</span>
+      <p class="contend__text" data-slot="contendText"></p>
+    </div>
+
+    <p class="card__foot" data-slot="duration"></p>
+  </article>
+</template>
+
+<!-- An errored run never executed: no freeze, no casualties. It must
+     never wear a red UNSAFE badge. Amber, with the database's own error
+     string shown verbatim. -->
+<template id="tpl-errored">
+  <article class="card card--errored">
+    <div class="card__verdict">
+      <span class="tag tag--amber">errored</span>
+      <span class="card__id"></span>
+    </div>
+    <h3 class="card__title">Postgres refused this migration</h3>
+    <p class="card__text">The statement never ran to completion, so there is no freeze and no casualties to report. This is the database's own error, verbatim.</p>
+    <pre class="errbox" data-slot="errBox"></pre>
+    <div class="teach" data-slot="teach" hidden>
+      <div class="teach__row" data-slot="explainRow" hidden>
+        <span class="teach__tag">what happened <i class="teach__lock" data-slot="lockModes" hidden></i></span>
+        <p class="teach__prose" data-slot="explanation"></p>
+      </div>
+      <div class="teach__row" data-slot="noteRow" hidden>
+        <span class="teach__tag">what to do next</span>
+        <p class="teach__prose" data-slot="note"></p>
+      </div>
+    </div>
+    <p class="card__foot" data-slot="duration"></p>
+  </article>
+</template>
+
+<!-- The run happened but the measurement can't be trusted. Reported
+     honestly rather than guessed as SAFE or UNSAFE. -->
+<template id="tpl-inconclusive">
+  <article class="card card--errored">
+    <div class="card__verdict">
+      <span class="tag tag--amber">inconclusive</span>
+      <span class="card__id"></span>
+    </div>
+    <h3 class="card__title">No verdict — the measurement wasn't clean</h3>
+    <p class="card__text">The run started, but a trustworthy measurement was never captured, so Brace will not call it safe or unsafe. Better an honest "don't know" than a guessed green light.</p>
+    <div class="teach" data-slot="teach" hidden>
+      <div class="teach__row" data-slot="explainRow" hidden>
+        <span class="teach__tag">what happened <i class="teach__lock" data-slot="lockModes" hidden></i></span>
+        <p class="teach__prose" data-slot="explanation"></p>
+      </div>
+      <div class="teach__row" data-slot="noteRow" hidden>
+        <span class="teach__tag">what to do next</span>
+        <p class="teach__prose" data-slot="note"></p>
+      </div>
     </div>
     <p class="card__foot" data-slot="duration"></p>
   </article>

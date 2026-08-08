@@ -98,6 +98,7 @@
   /* ── canvas tokens — read by app.js / landing.js ─────────── */
   --chart-green-rgb: 47,224,138;
   --chart-red-rgb:   255,59,48;
+  --chart-idle-rgb:  132,146,168;   /* resting trace — neutral, never alarms */
   --chart-area-alpha:.20;
   --chart-grid:      rgba(120,160,200,.07);
   --chart-axis:      rgba(148,165,185,.34);
@@ -232,6 +233,7 @@
 
   --chart-green-rgb: 11,143,85;
   --chart-red-rgb:   207,26,16;
+  --chart-idle-rgb:  110,124,144;   /* resting trace — neutral, never alarms */
   --chart-area-alpha:.18;
   --chart-grid:      rgba(40,70,110,.10);
   --chart-axis:      rgba(74,87,101,.44);

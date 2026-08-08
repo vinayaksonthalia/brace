@@ -41,11 +41,24 @@ const API = window.BRACE_API_BASE || (/^web-[^.]+\./.test(location.host)
         });
     },
 
-    run: function (sql) {
+    // The last completed run, so a page reload rehydrates the crash report
+    // instead of discarding it. GET /api/stats carries last_run.
+    hydrate: function () {
+      return fetch(API + '/api/stats', { headers: { accept: 'application/json' } })
+        .then(function (r) { return r.json(); })
+        .then(function (s) { return (s && s.last_run) || null; })
+        .catch(function () { return null; });
+    },
+
+    run: function (sql, opts) {
+      opts = opts || {};
+      var body = { sql: sql };
+      if (opts.hostile) body.hostile = true;
+      if (opts.target_rows != null) body.target_rows = opts.target_rows;
       return fetch(API + '/api/run', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ sql: sql })
+        body: JSON.stringify(body)
       }).then(function (r) {
         return r.json().catch(function () { return {}; }).then(function (body) {
           if (r.status === 202) return body;
@@ -177,6 +190,7 @@ const API = window.BRACE_API_BASE || (/^web-[^.]+\./.test(location.host)
       T = {
         green: rgb('--chart-green-rgb', '47,224,138'),
         red: rgb('--chart-red-rgb', '255,59,48'),
+        idle: rgb('--chart-idle-rgb', '132,146,168'),
         areaAlpha: parseFloat(v('--chart-area-alpha', '.20')) || 0.2,
         grid: v('--chart-grid', 'rgba(120,160,200,.07)'),
         axis: v('--chart-axis', 'rgba(142,160,181,.32)'),
@@ -318,15 +332,25 @@ const API = window.BRACE_API_BASE || (/^web-[^.]+\./.test(location.host)
       var last = series[series.length - 1];
       series.push({ t: now, v: last.v, blocked: last.blocked });
 
-      var GREEN = T.green, RED = T.red;
+      var GREEN = T.green, RED = T.red, IDLE = T.idle;
+
+      // Red is reserved for a live migration hurting writes. At idle no
+      // migration is running, so a low or zero trace is RESTING, not a
+      // crash — it must never render in crash-red. A genuinely quiet
+      // engine (near-zero traffic) reads neutral grey and says so.
+      var stateNow = document.documentElement.dataset.state || 'idle';
+      var armed = stateNow === 'running' || stateNow === 'crash';
+      var restingQuiet = !armed && baseline > 0 && last.v < baseline * 0.12;
 
       function hurtOf(p) {
         if (p.blocked) return 1;
+        if (!armed) return 0;            // idle never alarms
         if (!baseline) return 0;
         var ratio = p.v / baseline;
         return Math.min(1, Math.max(0, (0.9 - ratio) / 0.9));
       }
       function mix(t) {
+        if (restingQuiet) return IDLE;   // resting engine: neutral, not a crash
         var e = Math.pow(t, 0.72);   // reddens early, so the dip reads
         return [
           Math.round(GREEN[0] + (RED[0] - GREEN[0]) * e),
@@ -397,6 +421,17 @@ const API = window.BRACE_API_BASE || (/^web-[^.]+\./.test(location.host)
         ctx.lineWidth = 1;
         ctx.beginPath(); ctx.arc(hx, hy, pulse, 0, Math.PI * 2); ctx.stroke();
       }
+
+      // a quiet engine says so plainly, so a flat resting line never
+      // gets mistaken for a flatlined one
+      if (restingQuiet) {
+        ctx.save();
+        ctx.fillStyle = T.axisText;
+        ctx.font = '10px ui-monospace, SFMono-Regular, Menlo, monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText('ENGINE IDLE — RUN A MIGRATION TO START TRAFFIC', w / 2, padT + plotH * 0.42);
+        ctx.restore();
+      }
     }
 
     (function loop() { draw(); requestAnimationFrame(loop); })();
@@ -424,10 +459,12 @@ const API = window.BRACE_API_BASE || (/^web-[^.]+\./.test(location.host)
     mockChip: $('#mockChip'),
     sql: $('#sql'),
     runBtn: $('#runBtn'),
+    hostile: $('#hostileToggle'),
     cmdChip: $('#cmdChip'),
     runText: $('.run__text'),
     runHint: $('#runHint'),
     report: $('#reportBody'),
+    reportNotice: $('#reportNotice'),
     reportNote: $('#reportNote'),
     presets: Array.prototype.slice.call(document.querySelectorAll('.preset'))
   };
@@ -453,6 +490,28 @@ const API = window.BRACE_API_BASE || (/^web-[^.]+\./.test(location.host)
     if (reduceMotion.matches || !el.report.firstElementChild) { render(); return; }
     el.report.classList.add('is-swapping');
     setTimeout(render, 150);
+  }
+
+  // Transient states (rejected SQL, rig busy, rate-limited, warming a twin)
+  // mount HERE rather than in the report body, so a fumbled run never evicts
+  // the last real crash report. The notice is dismissible.
+  function clearNotice() {
+    if (!el.reportNotice) return;
+    el.reportNotice.innerHTML = '';
+    el.reportNotice.hidden = true;
+  }
+  function mountNotice(node) {
+    if (!el.reportNotice) { swapReport(function () { return node; }); return; }
+    clearNotice();
+    var close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'notice__close';
+    close.setAttribute('aria-label', 'Dismiss this notice');
+    close.innerHTML = '&times;';
+    close.addEventListener('click', clearNotice);
+    el.reportNotice.appendChild(close);
+    el.reportNotice.appendChild(node);
+    el.reportNotice.hidden = false;
   }
 
   // Count a number up on first paint. Measured figures deserve the beat.
@@ -503,6 +562,7 @@ const API = window.BRACE_API_BASE || (/^web-[^.]+\./.test(location.host)
     var copy = STATES[s] || STATES.idle;
     el.runBtn.disabled = busy;
     el.sql.disabled = busy;
+    if (el.hostile) el.hostile.disabled = busy;
     el.presets.forEach(function (b) { b.disabled = busy; });
     el.runText.textContent = copy.run;
     el.runHint.textContent = copy.hint;
@@ -568,6 +628,7 @@ const API = window.BRACE_API_BASE || (/^web-[^.]+\./.test(location.host)
 
   function onRunStarted(ev) {
     currentRun = ev;
+    clearNotice();
     chart.mark();
     setState('running');
     el.twin.textContent = ev.twin || 'cloning…';
@@ -578,6 +639,7 @@ const API = window.BRACE_API_BASE || (/^web-[^.]+\./.test(location.host)
 
   function onRunFinished(ev) {
     currentRun = null;
+    clearNotice();
     clearInterval(freezeTimer); freezeTimer = null;
     chart.closeBand();
     setState('idle');
@@ -772,61 +834,235 @@ const API = window.BRACE_API_BASE || (/^web-[^.]+\./.test(location.host)
   }
 
   var LABEL_NAMES = { checkout: 'checkouts', login: 'logins', add_to_cart: 'cart adds' };
+  var MODEL_NAMES = {
+    linear_by_rows: 'linear by row count',
+    access_exclusive_wait: 'lock-acquisition wait'
+  };
 
-  function renderReport(ev) {
-    var safe = String(ev.verdict).toUpperCase() === 'SAFE';
-    var card = tpl(safe ? 'tpl-safe' : 'tpl-unsafe');
-    card.querySelector('.card__id').textContent = ev.run_id ? 'run ' + ev.run_id : '';
+  /* ── verdict header: the honest headline ──────────────────────
+     The tag reads the EFFECTIVE verdict — the one after scale
+     projection, which is the number a judge should act on. When the
+     measured verdict differs (SAFE on the twin, UNSAFE once projected
+     or once the lock has to wait) we say both, so the flip is legible
+     rather than hidden. The qualifier chip fires when a result only
+     looked safe because contention was never simulated — that case
+     must never read as an unqualified green light. */
+  function renderVerdictExtras(card, ev, measured, effective, acqNotSim) {
+    var tagEl = card.querySelector('.card__verdict .tag');
+    if (tagEl && effective) tagEl.textContent = effective.toLowerCase();
 
-    var total = (ev.casualties && ev.casualties.total) || 0;
-    var byLabel = (ev.casualties && ev.casualties.by_label) || null;
+    var chip = slot(card, 'qualChip');
+    if (chip && acqNotSim) chip.hidden = false;
 
-    var asSecs = function (v) { return (Math.round(v * 10) / 10).toFixed(1) + 's'; };
+    var flip = slot(card, 'flip');
+    if (!flip) return;
+    if (measured && effective && measured !== effective) {
+      flip.textContent = acqNotSim
+        ? measured.toLowerCase() + ' as measured on the idle twin → ' +
+          effective.toLowerCase() + ' once the lock has to wait for a live transaction'
+        : measured.toLowerCase() + ' as measured on the 10M twin → ' +
+          effective.toLowerCase() + ' projected onto your table at scale';
+      flip.hidden = false;
+    }
+  }
 
-    if (safe) {
-      slot(card, 'freeze').textContent = secs(ev.blocked_seconds || 0);
-      slot(card, 'died').textContent = num(total);
-    } else {
-      tickTo(slot(card, 'freeze'), ev.blocked_seconds || 0, asSecs, 900);
-      tickTo(slot(card, 'died'), total, function (v) { return num(v) + ' writes'; }, 900);
+  /* ── two instruments agree ────────────────────────────────────
+     The freeze is measured two independent ways: by the drop in write
+     throughput, and by reading the lock straight from pg_locks. When
+     both landed and a freeze actually happened, showing them side by
+     side is a trust signal — two instruments corroborating, not noise. */
+  function renderCorroborate(card, ev) {
+    var host = slot(card, 'corroborate');
+    if (!host) return;
+    var b = ev.blocked_seconds, m = ev.monitor_blocked_seconds;
+    if (b == null || m == null || b <= 0.05 || m <= 0.05) return;
+    slot(card, 'corrWps').textContent = secs(b);
+    slot(card, 'corrLocks').textContent = secs(m);
+    host.hidden = false;
+  }
 
-      var mix = slot(card, 'mix');
-      if (byLabel) {
-        Object.keys(byLabel).forEach(function (k, i) {
-          var li = document.createElement('li');
-          li.innerHTML = '<b>' + num(byLabel[k]) + '</b> ' + (LABEL_NAMES[k] || k);
-          li.style.setProperty('--i', String(i));
-          mix.appendChild(li);
-        });
-      } else {
-        mix.remove();
+  /* ── the teach layer ──────────────────────────────────────────
+     The richest thing the engine returns, and what makes a non-expert
+     trust the verdict: a plain-English paragraph on what lock this
+     shape takes (explanation) and what THIS run means and what to do
+     next (note). Rendered as first-class prose, never raw JSON. */
+  function renderTeach(card, ev, acqNotSim) {
+    var host = slot(card, 'teach');
+    if (!host) return;
+    var any = false;
+
+    var exRow = slot(card, 'explainRow');
+    if (ev.explanation && exRow) {
+      slot(card, 'explanation').textContent = ev.explanation;
+      var lm = slot(card, 'lockModes');
+      if (lm) {
+        var modes = (ev.lock_modes || []).join(' · ');
+        var label = modes || ev.classification || '';
+        lm.textContent = label;
+        lm.hidden = !label;
       }
+      exRow.hidden = false;
+      any = true;
+    }
 
-      // projection — always second, always labelled, formula on demand
-      var rate = baselineWps || 0;
-      var denied = Math.round(rate * (ev.blocked_seconds || 0));
-      var share = { checkout: 0.22, login: 0.31 };
-      var proj = slot(card, 'projected');
-      proj.innerHTML = '~<span data-n="c"></span> checkouts + <span data-n="l"></span> logins denied';
-      tickTo(proj.querySelector('[data-n="c"]'), Math.round(denied * share.checkout), num, 900);
-      tickTo(proj.querySelector('[data-n="l"]'), Math.round(denied * share.login), num, 900);
-      slot(card, 'formula').innerHTML =
-        'Projection, not a measurement. <code>' + num(rate) + ' writes/sec × ' +
-        secs(ev.blocked_seconds) + ' = ' + num(denied) +
-        '</code> writes that would find the table locked, split by the traffic mix above. ' +
-        'The measured numbers are the two figures above this one.';
+    var noteRow = slot(card, 'noteRow');
+    if (ev.note && noteRow) {
+      slot(card, 'note').textContent = ev.note;
+      noteRow.hidden = false;
+      // when the verdict carries a caveat, the note IS the guidance —
+      // lead with it rather than let it read as a footnote
+      if (acqNotSim) noteRow.classList.add('teach__row--lead');
+      any = true;
+    }
 
-      var btn = slot(card, 'whyBtn');
-      var f = slot(card, 'formula');
+    if (any) host.hidden = false;
+  }
+
+  /* ── projected impact — the server's number, never ours ───────
+     The old build multiplied a client-side rate by the freeze and
+     presented the product as fact. It is gone. This shows only the
+     engine's own scale_projection, clearly labelled a projection, and
+     shows nothing at all when the engine did not make one. */
+  function renderProjection(card, ev) {
+    var wrap = slot(card, 'projWrap');
+    if (!wrap) return;
+    var sp = ev.scale_projection;
+    if (!sp || sp.projected_blocked_seconds == null || !sp.target_rows) return;
+
+    var rows = sp.target_rows >= 1e6
+      ? (Math.round(sp.target_rows / 1e5) / 10) + 'M'
+      : num(sp.target_rows);
+    var proj = slot(card, 'projected');
+    proj.innerHTML = '~<b data-n="p"></b> freeze projected at ' + rows + ' rows';
+    tickTo(proj.querySelector('[data-n="p"]'), sp.projected_blocked_seconds,
+      function (v) { return (Math.round(v * 10) / 10).toFixed(1) + 's'; }, 900);
+
+    var f = slot(card, 'formula');
+    if (f) {
+      var model = MODEL_NAMES[sp.model] || sp.model || 'model';
+      f.innerHTML = 'A projection, not a measurement. ' +
+        (ev.scale_warning ? ev.scale_warning.replace(/[<>&]/g, '') + ' ' : '') +
+        'Model: <code>' + model.replace(/[<>&]/g, '') + '</code>' +
+        (sp.measured_at_floor
+          ? '. The measured freeze was at the floor (nothing was contending), so the figure above is modelled, not scaled from a real freeze.'
+          : '.');
+    }
+    var btn = slot(card, 'whyBtn');
+    if (btn && f) {
       btn.addEventListener('click', function () {
         var open = btn.getAttribute('aria-expanded') === 'true';
         btn.setAttribute('aria-expanded', String(!open));
         f.hidden = open;
       });
     }
+    wrap.hidden = false;
+  }
 
+  /* ── hostile-mode contention ──────────────────────────────────
+     When a run held a transaction open to force the freeze to be
+     measured (not assumed), say so plainly: the freeze above was
+     caused by a real held lock. This is the "watch it die" beat. */
+  function renderContention(card, ev) {
+    var host = slot(card, 'contention');
+    if (!host) return;
+    var c = ev.contention;
+    if (!c || !(c.enabled || c.requested)) return;
+    var hold = c.hold_seconds != null ? c.hold_seconds : 0;
+    var cycles = c.cycles != null ? c.cycles : 0;
+    slot(card, 'contendText').innerHTML =
+      'A transaction was held open for <b>' + num(hold) + 's</b> across <b>' + num(cycles) + '</b> ' +
+      (cycles === 1 ? 'cycle' : 'cycles') +
+      ', so the freeze above was forced by a real held lock — measured, not assumed.';
+    host.hidden = false;
+  }
+
+  /* ── errored / inconclusive — never a red UNSAFE badge ────────
+     An errored run never executed, so it has no freeze and no
+     casualties. Rendering it as UNSAFE (red, all-zero evidence) while
+     hiding the Postgres error is, per the engine's own comment, the
+     single most misleading thing the tool could say. These get their
+     own honest cards, in the annotation colour, carrying the real
+     error string verbatim. */
+  function renderErrored(ev) {
+    var card = tpl('tpl-errored');
+    card.querySelector('.card__id').textContent = ev.run_id ? 'run ' + ev.run_id : '';
+    var box = slot(card, 'errBox');
+    if (box) box.textContent = ev.error || 'The database returned no error text.';
+    renderTeach(card, ev, false);
+    slot(card, 'duration').textContent = ev.duration_seconds != null
+      ? 'migration ran ' + secs(ev.duration_seconds) + ' · twin discarded'
+      : 'twin discarded';
+    swapReport(function () { return card; });
+  }
+
+  function renderInconclusive(ev) {
+    var card = tpl('tpl-inconclusive');
+    card.querySelector('.card__id').textContent = ev.run_id ? 'run ' + ev.run_id : '';
+    renderTeach(card, ev, false);
+    slot(card, 'duration').textContent = ev.duration_seconds != null
+      ? 'migration ran ' + secs(ev.duration_seconds) + ' · twin discarded'
+      : 'twin discarded';
+    swapReport(function () { return card; });
+  }
+
+  function renderReport(ev) {
+    var measured = String(ev.verdict || '').toUpperCase();
+    var effective = String(ev.effective_verdict || ev.verdict || '').toUpperCase();
+
+    if (effective === 'ERRORED') { renderErrored(ev); return; }
+    if (effective === 'INCONCLUSIVE') { renderInconclusive(ev); return; }
+
+    // the headline is the EFFECTIVE verdict — the one after scale projection
+    var safe = effective === 'SAFE';
+    var acqNotSim = ev.qualifier === 'acquisition_not_simulated';
+
+    var card = tpl(safe ? 'tpl-safe' : 'tpl-unsafe');
+    card.querySelector('.card__id').textContent = ev.run_id ? 'run ' + ev.run_id : '';
+
+    var total = (ev.casualties && ev.casualties.total) || 0;
+    var byLabel = (ev.casualties && ev.casualties.by_label) || null;
+    var asSecs = function (v) { return (Math.round(v * 10) / 10).toFixed(1) + 's'; };
+
+    renderVerdictExtras(card, ev, measured, effective, acqNotSim);
+
+    if (safe) {
+      slot(card, 'freeze').textContent = secs(ev.blocked_seconds || 0);
+      slot(card, 'died').textContent = num(total);
+    } else if (acqNotSim) {
+      // A red "0.0s" would read as an all-clear. It was never simulated —
+      // say that, and let the caveat + note carry the finding.
+      var fz = slot(card, 'freeze');
+      fz.textContent = 'not simulated';
+      var hero = fz.closest ? fz.closest('.metric') : null;
+      if (hero) hero.classList.add('metric--muted');
+      slot(card, 'died').textContent = num(total);
+      var mixA = slot(card, 'mix');
+      if (mixA) mixA.remove();
+    } else {
+      tickTo(slot(card, 'freeze'), ev.blocked_seconds || 0, asSecs, 900);
+      tickTo(slot(card, 'died'), total, function (v) { return num(v) + ' writes'; }, 900);
+
+      var mix = slot(card, 'mix');
+      if (byLabel && total > 0) {
+        Object.keys(byLabel).forEach(function (k, i) {
+          if (!byLabel[k]) return;
+          var li = document.createElement('li');
+          li.innerHTML = '<b>' + num(byLabel[k]) + '</b> ' + (LABEL_NAMES[k] || k);
+          li.style.setProperty('--i', String(i));
+          mix.appendChild(li);
+        });
+        if (!mix.children.length) mix.remove();
+      } else if (mix) {
+        mix.remove();
+      }
+    }
+
+    renderCorroborate(card, ev);
+    renderTeach(card, ev, acqNotSim);
     renderDivergence(card, ev, safe);
     renderWreckage(card, ev);
+    renderProjection(card, ev);
+    renderContention(card, ev);
 
     slot(card, 'duration').textContent = ev.duration_seconds != null
       ? 'migration ran ' + secs(ev.duration_seconds) + ' · twin discarded'
@@ -858,7 +1094,7 @@ const API = window.BRACE_API_BASE || (/^web-[^.]+\./.test(location.host)
       });
     }
     el.reportNote.textContent = 'not run';
-    swapReport(function () { return card; });
+    mountNotice(card);
   }
 
   function showPreparing(eta) {
@@ -868,7 +1104,7 @@ const API = window.BRACE_API_BASE || (/^web-[^.]+\./.test(location.host)
     var bar = slot(card, 'bar');
     span.textContent = left;
     el.reportNote.textContent = 'warming a twin';
-    swapReport(function () { return card; });
+    mountNotice(card);
 
     var total = left;
     var t = setInterval(function () {
@@ -890,7 +1126,7 @@ const API = window.BRACE_API_BASE || (/^web-[^.]+\./.test(location.host)
     var card = tpl(id);
     if (title && slot(card, 'title')) slot(card, 'title').textContent = title;
     if (reason && slot(card, 'reason')) slot(card, 'reason').textContent = reason;
-    swapReport(function () { return card; });
+    mountNotice(card);
   }
 
   /* ── console ────────────────────────────────────────────── */
@@ -921,9 +1157,11 @@ const API = window.BRACE_API_BASE || (/^web-[^.]+\./.test(location.host)
     var cmdResetTimer = null;
     var curlFor = function () {
       var origin = API || location.origin;
+      var body = { sql: el.sql.value };
+      if (el.hostile && el.hostile.checked) body.hostile = true;
       return "curl -sX POST " + origin + "/api/run \\\n" +
         "  -H 'content-type: application/json' \\\n" +
-        "  -d " + JSON.stringify(JSON.stringify({ sql: el.sql.value })).replace(/'/g, "'\\''");
+        "  -d " + JSON.stringify(JSON.stringify(body)).replace(/'/g, "'\\''");
     };
     var flash = function (label, ok) {
       var path = $('.cmd__path', el.cmdChip);
@@ -976,10 +1214,12 @@ const API = window.BRACE_API_BASE || (/^web-[^.]+\./.test(location.host)
   function doRun() {
     if (state === 'running' || state === 'crash') return;
     var sql = el.sql.value;
+    var hostile = !!(el.hostile && el.hostile.checked);
+    clearNotice();
     el.reportNote.textContent = 'dispatching';
     el.chamberState.textContent = 'loading the rig';   // pre-accept; setState takes over on run_started
 
-    api.run(sql).then(function (res) {
+    api.run(sql, { hostile: hostile }).then(function (res) {
       // run_started arrives on the stream; this only confirms acceptance.
       el.reportNote.textContent = 'run ' + (res.run_id || '') + ' accepted';
     }).catch(function (err) {
@@ -1038,6 +1278,18 @@ const API = window.BRACE_API_BASE || (/^web-[^.]+\./.test(location.host)
       onRunFinished: onRunFinished,
       onTransport: onTransport
     });
+
+    // A reload must not wipe the crash report. If the engine remembers the
+    // last completed run, render it — but never step on a run that has
+    // already started streaming, and only fill the empty state.
+    if (api.hydrate) {
+      api.hydrate().then(function (lr) {
+        if (lr && !currentRun && state === 'idle' && el.report.querySelector('.blank')) {
+          renderReport(lr);
+          el.reportNote.textContent = 'run ' + (lr.run_id || '') + ' · last run';
+        }
+      }).catch(function () {});
+    }
   }
 
   if (qs.get('mock') === '1') {

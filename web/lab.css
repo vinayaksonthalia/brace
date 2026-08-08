@@ -455,6 +455,57 @@ main{
 }
 .report__body.is-swapping{ opacity:0; }
 
+/* ── TRANSIENT NOTICE ─────────────────────────────────────────
+   Rejected SQL, rig busy, rate-limited, a warming twin — these render
+   here, above the last real crash report, so a fumbled paste never
+   evicts the demo artifact. Dismissible. */
+.report__notice{
+  position:relative;
+  padding:var(--gut) var(--gut) 0;
+  animation:chip var(--t-slow) var(--ease) both;
+}
+.report__notice .card{ animation:none; }
+.notice__close{
+  position:absolute; top:calc(var(--gut) + var(--s1)); right:var(--gut); z-index:2;
+  width:30px; height:30px; display:grid; place-items:center;
+  background:var(--panel-2); border:1px solid var(--edge); border-radius:var(--r-sm);
+  color:var(--ink-2); font-size:20px; line-height:1; cursor:pointer; font-family:var(--sans);
+  transition:border-color var(--t-fast) var(--ease), color var(--t-fast) var(--ease), background var(--t-fast) var(--ease);
+}
+/* the visible button stays compact; the tap target does not */
+.notice__close::before{
+  content:""; position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+  width:44px; height:44px;
+}
+.notice__close:hover{ border-color:var(--edge-hot); color:var(--ink); background:var(--panel-2-hover); }
+.notice__close:active{ background:var(--panel-2-pressed); }
+/* keep the dismiss clear of the note card's title */
+.report__notice .card--note .card__title{ padding-right:var(--s7); }
+
+/* ── ERRORED / INCONCLUSIVE CARD ──────────────────────────────
+   An errored run never executed. Amber (the annotation colour), with
+   the database's own error string shown verbatim in the console's mono.
+   Never red, never an all-zero UNSAFE badge. */
+.card--errored{ position:relative; }
+.card--errored::before{
+  content:""; position:absolute; top:-4px; bottom:-4px; width:2px;
+  left:calc(var(--gut) * -1); background:var(--amber); transform:scaleY(0); transform-origin:top;
+  animation:edge var(--t-beat) var(--ease-strong) 120ms both;
+}
+.card--errored .card__title{
+  margin:0 0 var(--s2); font-size:var(--t-lede); font-weight:650; letter-spacing:-.012em;
+  font-family:var(--sans); color:var(--ink);
+}
+.card--errored .card__text{
+  margin:0; font-family:var(--sans); font-size:var(--t-body); line-height:1.68; color:var(--ink-2);
+}
+.errbox{
+  margin:var(--s4) 0 0; padding:var(--s3) var(--s4);
+  background:var(--well); border:1px solid var(--crash-edge); border-left-width:2px; border-radius:var(--r-sm);
+  font-family:var(--mono); font-size:12.5px; line-height:1.6; color:var(--red);
+  white-space:pre-wrap; word-break:break-word;
+}
+
 /* the empty state is the shape of the answer, unfilled */
 .blank{ width:100%; align-self:center; }
 .blank__lead{
@@ -511,7 +562,8 @@ main{
 }
 @keyframes edge{ to{ transform:scaleY(1); } }
 
-.card__verdict{ display:flex; align-items:center; justify-content:space-between; gap:var(--s3); margin-bottom:var(--s4); }
+.card__verdict{ display:flex; align-items:center; gap:var(--s2) var(--s3); flex-wrap:wrap; margin-bottom:var(--s4); }
+.card__verdict .card__id{ margin-left:auto; }
 .tag{
   font-size:var(--t-micro); font-weight:700; letter-spacing:var(--track-eyebrow); text-transform:uppercase;
   padding:5px 11px; border-radius:var(--r-sm);
@@ -709,6 +761,125 @@ main{
 .byoc__step p{
   margin:5px 0 0; font-family:var(--sans); font-size:12.5px; line-height:1.6; color:var(--ink-3);
 }
+
+/* ═══ HOSTILE MODE TOGGLE ═══════════════════════════════════════
+   An ACCESS EXCLUSIVE statement acquires its lock instantly on an idle
+   twin, so the production freeze is assumed, not measured. This holds a
+   transaction open to force the wait. Amber, because it is the operator
+   arming an extra instrument — the same register the rig uses when armed. */
+.hostile{
+  display:flex; align-items:flex-start; gap:var(--s3);
+  margin:0 var(--gut) var(--s1); padding:var(--s3);
+  border:1px solid var(--edge); border-radius:var(--r-sm);
+  background:var(--panel-2); cursor:pointer;
+  transition:border-color var(--t-fast) var(--ease), background var(--t-fast) var(--ease);
+}
+.hostile:hover{ border-color:var(--edge-hot); }
+.hostile:has(input:checked){ border-color:var(--amber-dim); background:var(--amber-wash); }
+.hostile input{ position:absolute; width:1px; height:1px; opacity:0; }
+.hostile__box{
+  flex:none; width:20px; height:20px; margin-top:1px;
+  border:1px solid var(--edge-hot); border-radius:var(--r-xs);
+  background:var(--well); color:var(--on-amber);
+  display:grid; place-items:center;
+  transition:background var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease);
+}
+.hostile__box svg{
+  width:13px; height:13px; opacity:0; transform:scale(.6);
+  transition:opacity var(--t-fast) var(--ease), transform var(--t-fast) var(--ease);
+}
+.hostile input:checked + .hostile__box{ background:var(--amber); border-color:var(--amber); }
+.hostile input:checked + .hostile__box svg{ opacity:1; transform:none; }
+.hostile input:focus-visible + .hostile__box{ outline:2px solid var(--amber); outline-offset:2px; }
+.hostile__text{ display:flex; flex-direction:column; gap:2px; min-width:0; }
+.hostile__text b{
+  font-size:var(--t-label); font-weight:600; letter-spacing:.1em; text-transform:uppercase; color:var(--amber);
+}
+.hostile__text span{ font-family:var(--sans); font-size:12px; line-height:1.5; color:var(--ink-3); }
+.hostile input:disabled ~ .hostile__text{ opacity:.55; }
+.hostile:has(input:disabled){ cursor:not-allowed; opacity:.7; }
+
+/* ═══ REPORT — THE TEACH LAYER ══════════════════════════════════
+   The qualifier chip, the measured/effective flip, the two-instrument
+   corroboration, the plain-English explanation + note, and the
+   contention record. Prose in sans (a person explaining), machine
+   facts in mono, caveats in amber — the product's own colour discipline. */
+
+/* the honest caveat: never let a not-simulated pass read as green */
+.qual{
+  font-size:9px; font-weight:700; letter-spacing:.12em; text-transform:uppercase;
+  color:var(--amber); background:var(--amber-wash);
+  border:1px solid var(--amber-dim); border-radius:var(--r-pill);
+  padding:3px 9px; white-space:nowrap;
+}
+/* the flip: SAFE as measured → UNSAFE effective. The killer demo beat. */
+.verdict-flip{
+  margin:calc(-1 * var(--s2)) 0 var(--s4);
+  font-family:var(--sans); font-size:12.5px; line-height:1.5; color:var(--ink-2);
+  border-left:2px solid var(--amber); padding-left:var(--s3);
+}
+
+/* a freeze that was never simulated must not shout a red "0.0s" */
+.card--unsafe .metric--muted .metric__value{
+  color:var(--ink-2); text-shadow:none;
+  font-size:clamp(20px,4vw,26px); letter-spacing:0;
+}
+
+/* two independent instruments corroborating the same freeze */
+.corr{
+  margin-top:var(--s4); padding-top:var(--s4); border-top:1px solid var(--edge);
+  animation:chip var(--t-slow) var(--ease) 300ms both;
+}
+.corr__tag{
+  display:block; font-size:9.5px; letter-spacing:.15em; text-transform:uppercase; color:var(--ink-3);
+  margin-bottom:var(--s3);
+}
+.corr__rows{ display:flex; gap:var(--s3); flex-wrap:wrap; }
+.corr__cell{
+  flex:1; min-width:130px; display:flex; flex-direction:column; gap:4px;
+  padding:var(--s3); border:1px solid var(--edge); border-radius:var(--r-sm); background:var(--panel-2);
+}
+.corr__cell b{
+  font-size:22px; font-weight:700; color:var(--ink); letter-spacing:-.02em; font-variant-numeric:tabular-nums;
+}
+.corr__cell i{ font-style:normal; font-size:9.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-3); }
+.corr__foot{ margin:var(--s3) 0 0; font-family:var(--sans); font-size:12px; line-height:1.6; color:var(--ink-3); }
+
+/* explanation + note — the gold. Prose, first-class, not an afterthought. */
+.teach{
+  margin-top:var(--s4); padding-top:var(--s4); border-top:1px solid var(--edge);
+  display:flex; flex-direction:column; gap:var(--s4);
+  animation:chip var(--t-slow) var(--ease) 380ms both;
+}
+.teach__row{ display:flex; flex-direction:column; gap:var(--s2); }
+.teach__tag{
+  display:flex; align-items:center; gap:var(--s2); flex-wrap:wrap;
+  font-size:9.5px; letter-spacing:.15em; text-transform:uppercase; color:var(--ink-3);
+}
+.teach__lock{
+  font-style:normal; font-family:var(--mono); font-size:10px; letter-spacing:.04em; text-transform:none;
+  color:var(--ink-2); border:1px solid var(--edge); border-radius:var(--r-xs); padding:1px 6px;
+}
+.teach__prose{
+  margin:0; font-family:var(--sans); font-size:13.5px; line-height:1.62; color:var(--ink-2); max-width:64ch;
+}
+/* when the verdict carries a caveat, the note IS the guidance — lead with it */
+.teach__row--lead{ border-left:2px solid var(--amber); padding-left:var(--s3); }
+.teach__row--lead .teach__tag{ color:var(--amber); }
+
+/* hostile mode: the held transaction that forced the freeze to be real */
+.contend{
+  margin-top:var(--s4); padding:var(--s3) var(--s4);
+  border:1px solid var(--amber-dim); border-left-width:2px; border-radius:var(--r-sm);
+  background:var(--amber-wash);
+  animation:chip var(--t-slow) var(--ease) 440ms both;
+}
+.contend__tag{
+  display:block; font-size:9.5px; letter-spacing:.15em; text-transform:uppercase; color:var(--amber);
+  margin-bottom:var(--s2);
+}
+.contend__text{ margin:0; font-family:var(--sans); font-size:12.5px; line-height:1.62; color:var(--ink-2); }
+.contend__text b{ color:var(--ink); font-variant-numeric:tabular-nums; }
 
 /* ── RESPONSIVE ───────────────────────────────────────────── */
 @media (max-width:900px){
