@@ -132,8 +132,8 @@ document.documentElement.className+=' js';})();</script>
         <div class="navgroup">
           <p class="navgroup__label">The stack</p>
           <ul>
-            <li><a class="navlink" href="#stack" data-nav><span class="navlink__ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2 2 5l6 3 6-3z"/><path d="M2 8l6 3 6-3M2 11l6 3 6-3"/></svg></span><span>The stack</span></a></li>
             <li><a class="navlink" href="#zerops" data-nav><span class="navlink__ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="2.4" y="2.8" width="11.2" height="4.2" rx="1.2"/><rect x="2.4" y="9" width="11.2" height="4.2" rx="1.2"/><path d="M5 4.9h.01M5 11.1h.01"/></svg></span><span>Why Zerops</span></a></li>
+            <li><a class="navlink" href="#stack" data-nav><span class="navlink__ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2 2 5l6 3 6-3z"/><path d="M2 8l6 3 6-3M2 11l6 3 6-3"/></svg></span><span>The stack</span></a></li>
           </ul>
         </div>
         <p class="nav-empty">No section matches that.</p>
@@ -894,6 +894,49 @@ pg_restore -U &lt;superuser&gt; -d brace_template your-dump.dump</pre>
     </section>
 
     <!-- ══ 12 · WHY ZEROPS ══════════════════════════════════════ -->
+    <section class="doc-sec reveal" id="zerops" data-title="Why Zerops">
+      <p class="eyebrow">Architecture · Why Zerops</p>
+      <h2>What Brace needs from its infrastructure — and how Zerops provides it.</h2>
+
+      <p><strong class="lead-in">The hard requirement:</strong> Brace needs a Postgres it is <strong>superuser</strong> on. It creates and drops databases on every single run and clones them with native <code>CREATE DATABASE … TEMPLATE</code> — and most managed Postgres offerings allow neither (no superuser, no arbitrary <code>CREATE DATABASE</code>, no <code>TEMPLATE</code> from a live db). <a href="https://zerops.io" target="_blank" rel="noopener noreferrer">Zerops</a> gives you a real Postgres you own, not a locked-down slice — which is the one thing that makes the whole twin mechanism possible.</p>
+
+      <h3>The four services</h3>
+      <p>Brace is not one box; it is four Zerops services stood up from a single <code>import.yml</code>, each doing one job:</p>
+      <div class="doc-tablewrap">
+        <table class="doc-table">
+          <thead><tr><th>Service</th><th>Runtime</th><th>Job</th></tr></thead>
+          <tbody>
+            <tr><td><code>api</code></td><td>Go (<code>go@1</code>)</td><td>The engine. Clones the twin, drives the labelled load, runs the migration, watches <code>pg_locks</code>, computes the verdict, streams SSE.</td></tr>
+            <tr><td><code>web</code></td><td>static</td><td>The dashboard and this manual — plain HTML/CSS/JS, no build step, served straight off Zerops' static runtime.</td></tr>
+            <tr><td><code>mcp</code></td><td>Python (<code>python@3.12</code>)</td><td>The hosted <a href="#mcp">MCP endpoint</a> (FastMCP over streamable HTTP). A thin client that turns an agent's <code>check_migration</code> call into an <code>api</code> request over the private network.</td></tr>
+            <tr><td><code>db</code></td><td>PostgreSQL 16</td><td>The lab's Postgres, on <strong>dedicated vCPU</strong>. Holds the seeded template and every throwaway twin.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>The private network is the security boundary</h3>
+      <p>The services talk over Zerops' <strong>private network</strong>, and that is not a convenience — it is the security model. The <code>db</code> is never exposed publicly; the superuser DSN lives only inside the project and is never in git. The <code>mcp</code> service reaches the engine at <code>http://api:8080</code> by service name, so the endpoint a stranger's agent connects to has no path to the database except through the same allow-listed, rate-limited engine a browser hits. The role boundary does the rest: your SQL runs as <code>brace_migrator</code> and load as <code>brace_traffic</code>, both <code>NOSUPERUSER</code> — see <a href="#byod">the self-host security notes</a>.</p>
+
+      <h3>Why the database has dedicated vCPU</h3>
+      <p>This is the one place the $65 credit is deliberately spent, and it is load-bearing for the demo. The naive run wants <em>high</em> write load so the freeze is punchy; but <code>CREATE INDEX CONCURRENTLY</code> does two full heap scans, and on a shared core those scans starve the writers — the "safe" line sags under the very load that makes the naive line dramatic. Give <code>db</code> its own 2–3 vCPU and the concurrent build has a core the writers aren't fighting for: the naive run still craters and the safe run stays <em>flat under the same load</em>. The whole naive-vs-safe contrast — the money shot — depends on this.</p>
+
+      <h3>The twin lifecycle Zerops makes cheap</h3>
+      <p>Because Brace owns the Postgres, the twin mechanism is native and fast: a permanent <code>brace_template</code> (seeded, <code>ALLOW_CONNECTIONS false</code> so a stray connection can never block a clone) is copied with <code>CREATE DATABASE … TEMPLATE</code> in well under a second, kept in a small <strong>warm pool</strong> so a run starts instantly, and torn down with <code>DROP DATABASE … WITH (FORCE)</code> the moment it finishes. Orphaned twins from a crashed run are swept on startup. Every crash happens on a physical copy that is dropped when the run ends — nothing real is ever at risk.</p>
+
+      <h3>What building on Zerops actually cost — honestly</h3>
+      <p>Two real edges, because a stack page that only lists wins isn't a stack page:</p>
+      <ul>
+        <li>The platform proxy turned the MCP's <code>POST /mcp/</code> into a <code>307 → GET /mcp</code> and broke the streamable-HTTP handshake. The fix is an ASGI path-normalising wrapper that serves both <code>/mcp</code> and <code>/mcp/</code> directly — so the remote endpoint works whether or not the client sends the trailing slash.</li>
+        <li>A service isn't reachable on its public subdomain until subdomain access is explicitly enabled (<code>zcli service enable-subdomain</code>); the private-network name works immediately, the public URL needs that one extra step. Worth knowing before you go looking for a URL that isn't on yet.</li>
+      </ul>
+      <p>Deploys are per-service and scriptable — <code>zcli push --serviceId … --setup &lt;name&gt;</code> — which is what made a fix→deploy→verify loop tight enough to iterate on all weekend. The one trap: the engine and the MCP are <em>separate</em> services, so an engine fix isn't live for agents until <strong>both</strong> <code>api</code> and <code>mcp</code> are redeployed.</p>
+
+      <div class="callout">
+        <span class="callout__mark">easy here, not trapped here</span>
+        <p>None of this is proprietary. Brace is standard Go, static assets, Python and PostgreSQL 16 with no vendor APIs, so it runs anywhere those do — a single <code>import.yml</code> stands up all four services, which is exactly what makes <a href="#byod">bring-your-own-data</a> a two-variable change instead of a fork. Zerops is where Brace is <em>easy</em>, not where it is <em>locked in</em>.</p>
+      </div>
+    </section>
+
     <!-- ══ THE STACK — AND WHY ═════════════════════════════════ -->
     <section class="doc-sec reveal" id="stack" data-title="The stack">
       <p class="eyebrow">The stack · and why</p>
@@ -960,49 +1003,6 @@ pg_restore -U &lt;superuser&gt; -d brace_template your-dump.dump</pre>
       <div class="callout">
         <span class="callout__mark">the throughline</span>
         <p>One measurement engine in Go, spoken to three ways — web, CLI, MCP — against a Postgres Brace owns. Every choice removes a layer that could stand between you and what the database actually did.</p>
-      </div>
-    </section>
-
-    <section class="doc-sec reveal" id="zerops" data-title="Why Zerops">
-      <p class="eyebrow">Architecture · Why Zerops</p>
-      <h2>What Brace needs from its infrastructure — and how Zerops provides it.</h2>
-
-      <p><strong class="lead-in">The hard requirement:</strong> Brace needs a Postgres it is <strong>superuser</strong> on. It creates and drops databases on every single run and clones them with native <code>CREATE DATABASE … TEMPLATE</code> — and most managed Postgres offerings allow neither (no superuser, no arbitrary <code>CREATE DATABASE</code>, no <code>TEMPLATE</code> from a live db). <a href="https://zerops.io" target="_blank" rel="noopener noreferrer">Zerops</a> gives you a real Postgres you own, not a locked-down slice — which is the one thing that makes the whole twin mechanism possible.</p>
-
-      <h3>The four services</h3>
-      <p>Brace is not one box; it is four Zerops services stood up from a single <code>import.yml</code>, each doing one job:</p>
-      <div class="doc-tablewrap">
-        <table class="doc-table">
-          <thead><tr><th>Service</th><th>Runtime</th><th>Job</th></tr></thead>
-          <tbody>
-            <tr><td><code>api</code></td><td>Go (<code>go@1</code>)</td><td>The engine. Clones the twin, drives the labelled load, runs the migration, watches <code>pg_locks</code>, computes the verdict, streams SSE.</td></tr>
-            <tr><td><code>web</code></td><td>static</td><td>The dashboard and this manual — plain HTML/CSS/JS, no build step, served straight off Zerops' static runtime.</td></tr>
-            <tr><td><code>mcp</code></td><td>Python (<code>python@3.12</code>)</td><td>The hosted <a href="#mcp">MCP endpoint</a> (FastMCP over streamable HTTP). A thin client that turns an agent's <code>check_migration</code> call into an <code>api</code> request over the private network.</td></tr>
-            <tr><td><code>db</code></td><td>PostgreSQL 16</td><td>The lab's Postgres, on <strong>dedicated vCPU</strong>. Holds the seeded template and every throwaway twin.</td></tr>
-          </tbody>
-        </table>
-      </div>
-
-      <h3>The private network is the security boundary</h3>
-      <p>The services talk over Zerops' <strong>private network</strong>, and that is not a convenience — it is the security model. The <code>db</code> is never exposed publicly; the superuser DSN lives only inside the project and is never in git. The <code>mcp</code> service reaches the engine at <code>http://api:8080</code> by service name, so the endpoint a stranger's agent connects to has no path to the database except through the same allow-listed, rate-limited engine a browser hits. The role boundary does the rest: your SQL runs as <code>brace_migrator</code> and load as <code>brace_traffic</code>, both <code>NOSUPERUSER</code> — see <a href="#byod">the self-host security notes</a>.</p>
-
-      <h3>Why the database has dedicated vCPU</h3>
-      <p>This is the one place the $65 credit is deliberately spent, and it is load-bearing for the demo. The naive run wants <em>high</em> write load so the freeze is punchy; but <code>CREATE INDEX CONCURRENTLY</code> does two full heap scans, and on a shared core those scans starve the writers — the "safe" line sags under the very load that makes the naive line dramatic. Give <code>db</code> its own 2–3 vCPU and the concurrent build has a core the writers aren't fighting for: the naive run still craters and the safe run stays <em>flat under the same load</em>. The whole naive-vs-safe contrast — the money shot — depends on this.</p>
-
-      <h3>The twin lifecycle Zerops makes cheap</h3>
-      <p>Because Brace owns the Postgres, the twin mechanism is native and fast: a permanent <code>brace_template</code> (seeded, <code>ALLOW_CONNECTIONS false</code> so a stray connection can never block a clone) is copied with <code>CREATE DATABASE … TEMPLATE</code> in well under a second, kept in a small <strong>warm pool</strong> so a run starts instantly, and torn down with <code>DROP DATABASE … WITH (FORCE)</code> the moment it finishes. Orphaned twins from a crashed run are swept on startup. Every crash happens on a physical copy that is dropped when the run ends — nothing real is ever at risk.</p>
-
-      <h3>What building on Zerops actually cost — honestly</h3>
-      <p>Two real edges, because a stack page that only lists wins isn't a stack page:</p>
-      <ul>
-        <li>The platform proxy turned the MCP's <code>POST /mcp/</code> into a <code>307 → GET /mcp</code> and broke the streamable-HTTP handshake. The fix is an ASGI path-normalising wrapper that serves both <code>/mcp</code> and <code>/mcp/</code> directly — so the remote endpoint works whether or not the client sends the trailing slash.</li>
-        <li>A service isn't reachable on its public subdomain until subdomain access is explicitly enabled (<code>zcli service enable-subdomain</code>); the private-network name works immediately, the public URL needs that one extra step. Worth knowing before you go looking for a URL that isn't on yet.</li>
-      </ul>
-      <p>Deploys are per-service and scriptable — <code>zcli push --serviceId … --setup &lt;name&gt;</code> — which is what made a fix→deploy→verify loop tight enough to iterate on all weekend. The one trap: the engine and the MCP are <em>separate</em> services, so an engine fix isn't live for agents until <strong>both</strong> <code>api</code> and <code>mcp</code> are redeployed.</p>
-
-      <div class="callout">
-        <span class="callout__mark">easy here, not trapped here</span>
-        <p>None of this is proprietary. Brace is standard Go, static assets, Python and PostgreSQL 16 with no vendor APIs, so it runs anywhere those do — a single <code>import.yml</code> stands up all four services, which is exactly what makes <a href="#byod">bring-your-own-data</a> a two-variable change instead of a fork. Zerops is where Brace is <em>easy</em>, not where it is <em>locked in</em>.</p>
       </div>
     </section>
 
