@@ -117,24 +117,28 @@ document.documentElement.className+=' js';})();</script>
 
   <p>A schema change that looks harmless on an empty staging table can lock a live table for tens of seconds. During that lock, writes pile up; the ones that wait too long fail outright. Brace exists to show you that — as a measured number of dead writes on a throwaway copy — before the same statement touches production.</p>
 
-  <p>The whole idea is <strong>the same SQL, two fates.</strong> Two migrations can leave the schema in an identical end state, yet one is safe to run against a live table and the other is an outage:</p>
+  <p>The whole idea is <strong>the same end state, two fates.</strong> The same index — <code>orders (email)</code> — can be built two ways. Both leave an identical index behind, yet one is safe to run against a live table and the other is an outage:</p>
 
   <div class="doc-code">
     <div class="doc-code__cap"><b>what most people ship</b></div>
-<pre><span class="c">-- rewrites the whole table while holding a lock the entire time</span>
-ALTER TABLE orders ADD COLUMN discount_code text NOT NULL DEFAULT random()::text;</pre>
+<pre><span class="c">-- takes a SHARE lock and holds it for the whole build — every write queues behind it</span>
+CREATE INDEX idx_orders_email ON orders (email);</pre>
   </div>
 
-  <p>On Brace's 10-million-row twin, under live checkout / login / cart traffic, that holds an <code>ACCESS EXCLUSIVE</code> lock for the entire rewrite: <strong>31.0 seconds</strong> of frozen writes and <strong>480 writes</strong> killed mid-checkout — real <code>55P03</code> errors, not a simulation of them.</p>
+  <p>On Brace's 10-million-row twin, under live checkout / login / cart traffic, that holds its <code>SHARE</code> lock for the entire build: <strong>15.8–20.5 seconds</strong> of frozen writes and <strong>240–312 writes</strong> killed at the <code>lock_timeout</code> — real <code>55P03</code> errors, not a simulation of them.</p>
 
   <div class="doc-code">
     <div class="doc-code__cap"><b>the rewrite Brace suggests</b></div>
-<pre>ALTER TABLE orders ADD COLUMN discount_code text;
-UPDATE orders SET discount_code = random()::text;   <span class="c">-- batched, no lock held</span>
-ALTER TABLE orders ALTER COLUMN discount_code SET NOT NULL;</pre>
+<pre><span class="c">-- SHARE UPDATE EXCLUSIVE — builds the same index without ever blocking writers</span>
+CREATE INDEX CONCURRENTLY idx_orders_email ON orders (email);</pre>
   </div>
 
-  <p>Same end state, same twin, same traffic: <strong>0.00 seconds</strong> frozen, <strong>0 writes</strong> dead. That contrast — measured, on a full-size twin, under real concurrent writes — is the product. Brace does not read your SQL and guess; it runs your SQL and counts the bodies.</p>
+  <p>Same index, same twin, same traffic: <strong>0.00 seconds</strong> frozen, <strong>0 writes</strong> dead. Both are single statements the lab runs and measures end to end, so the contrast is counted, not asserted. Brace does not read your SQL and guess; it runs your SQL and counts the bodies.</p>
+
+  <div class="callout">
+    <span class="callout__mark">one statement per run</span>
+    <p>Some safe rewrites are a <em>sequence</em>, not one statement. Adding a <code>NOT NULL</code> column without a table rewrite means adding the column nullable, backfilling in batches, then <code>ADD CONSTRAINT … CHECK (col IS NOT NULL) NOT VALID</code> followed by <code>VALIDATE CONSTRAINT</code> — a validate scan that doesn't hold the blocking lock. Brace measures a single statement per run, so rehearse each step on its own. That is a conceptual pattern, not one measured lab result.</p>
+  </div>
 </section>
 
 <!-- ══ 02 · THE SCIENCE ═══════════════════════════════════════ -->
@@ -220,7 +224,7 @@ ALTER TABLE orders ALTER COLUMN discount_code SET NOT NULL;</pre>
         <div class="doc-code__cap"><b>exit-code contract</b></div>
 <pre>brace-check -f migration.sql
 <span class="c"># 0  → SAFE     — merge it</span>
-<span class="c"># 1  → UNSAFE   — froze writes &gt; 1s and real writes died; block the deploy</span>
+<span class="c"># 1  → UNSAFE   — froze writes &gt; 1s OR real writes died; block the deploy</span>
 <span class="c"># 2  → rejected / errored / inconclusive — no clean verdict</span>
 
 <span class="c"># project the measured freeze onto your real table size:</span>
@@ -336,7 +340,7 @@ BRACE_LOAD_LABELS: >-
   <div class="api">
     <div class="api-row">
       <div class="api-sig"><span class="api-verb api-verb--post">post</span><span class="api-path">/api/run</span></div>
-      <p class="api-desc">Rehearse one migration. Body: <code>{ sql, mode, target_rows?, hostile? }</code>. Returns the run's verdict, freeze, casualties by label, lock modes, any scale projection, and (on unsafe) a suggested rewrite.</p>
+      <p class="api-desc">Rehearse one migration. Body: <code>{ sql, mode?, target_rows?, hostile? }</code> (a run takes ten seconds, so the call does not hold the request open). Returns <code>202 { run_id }</code> on admission, or a <code>4xx</code> / <code>503</code> with a reason when the statement is rejected or no twin is warm yet. The completed report card — verdict, effective verdict, freeze, casualties by label, lock modes, any scale projection, and (on unsafe) a suggested rewrite — is read back from <code>GET /api/stats</code> as <code>last_run</code>, and pushed live over <code>GET /api/stream</code>.</p>
     </div>
     <div class="api-row">
       <div class="api-sig"><span class="api-verb api-verb--get">get</span><span class="api-path">/api/status</span></div>

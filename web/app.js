@@ -113,11 +113,14 @@ const API = window.BRACE_API_BASE || (/^web-[^.]+\./.test(location.host)
         });
       }
 
-      // Polling can't carry run_started / run_finished events, so we
-      // synthesise both from the stats stream's run_id + blocked flags.
+      // Polling can't carry run_started / run_finished events, so we derive
+      // the run lifecycle from the stats stream's run_id. The RESULT itself is
+      // never invented: GET /api/stats already carries the full, real report in
+      // last_run (verdict, effective_verdict, note, qualifier, contention,
+      // casualties, scale_projection, …). We render THAT, byte-for-byte the same
+      // as the SSE run_finished path — synthesising a verdict from blocked flags
+      // would turn an ERRORED run green and strip a hostile run of its caveats.
       var seenRun = null;
-      var lastBlocked = false;
-      var freezeStart = 0;
 
       function fallbackToPolling() {
         if (closed || poller) return;
@@ -130,26 +133,38 @@ const API = window.BRACE_API_BASE || (/^web-[^.]+\./.test(location.host)
             .then(function (s) {
               if (closed) return;
               setMode('poll', 'live · polling');
+              // A run just landed on the rig.
               if (s.run_id && s.run_id !== seenRun) {
                 seenRun = s.run_id;
-                freezeStart = 0;
                 h.onRunStarted({ run_id: s.run_id, twin: s.twin || null, mode: s.mode || 'custom', sql: null });
               }
-              if (s.blocked && !lastBlocked) freezeStart = Date.now();
-              if (!s.run_id && seenRun) {
-                var blockedSeconds = freezeStart ? (Date.now() - freezeStart) / 1000 : 0;
-                h.onRunFinished({
-                  run_id: seenRun,
-                  verdict: blockedSeconds > 0.4 ? 'UNSAFE' : 'SAFE',
-                  blocked_seconds: Math.round(blockedSeconds * 10) / 10,
-                  casualties: { total: s.casualties_total || 0, by_label: null },
-                  duration_seconds: null,
-                  error: null,
-                  synthesised: true
-                });
-                seenRun = null;
+              // The run we were watching has left the rig. Its complete result
+              // is in THIS same response as last_run — hand that straight to the
+              // report, exactly like SSE. Wait for last_run to catch up to our
+              // run before rendering, so we never paint the previous run's card
+              // as this one's; and if it can't be retrieved at all, show a
+              // neutral "couldn't read it back" state rather than a guessed one.
+              if (seenRun && !s.run_id) {
+                var lr = s.last_run;
+                if (lr && lr.run_id === seenRun) {
+                  h.onRunFinished(lr);
+                  seenRun = null;
+                } else if (lr && lr.run_id) {
+                  // last_run is still the prior run; our row isn't published
+                  // yet. Leave seenRun set and try again on the next poll.
+                } else {
+                  h.onRunFinished({
+                    run_id: seenRun,
+                    verdict: 'INCONCLUSIVE',
+                    effective_verdict: 'INCONCLUSIVE',
+                    note: 'The stats stream dropped and the completed run could not be read back, ' +
+                      'so no verdict is shown here. This is reported rather than guessed — re-run to measure it.',
+                    error: 'result unavailable',
+                    unretrieved: true
+                  });
+                  seenRun = null;
+                }
               }
-              lastBlocked = !!s.blocked;
               h.onStats(s);
             })
             .catch(function () { setMode('down', 'lab offline'); });
@@ -1026,7 +1041,12 @@ const API = window.BRACE_API_BASE || (/^web-[^.]+\./.test(location.host)
     var wrap = slot(card, 'projWrap');
     if (!wrap) return;
     var sp = ev.scale_projection;
-    if (!sp || sp.projected_blocked_seconds == null || !sp.target_rows) return;
+    // Only render a REAL projection. The deployment always sets target_rows, so
+    // a refused projection still arrives as an object — but with an empty verdict
+    // and a 0 that a `!= null` check would happily paint as "~0.0s projected"
+    // under a measured multi-second freeze. Verdict is the engine's own Known()
+    // signal: empty verdict / 0 projected must render nothing.
+    if (!sp || !sp.verdict || !sp.target_rows) return;
 
     var rows = sp.target_rows >= 1e6
       ? (Math.round(sp.target_rows / 1e5) / 10) + 'M'
@@ -1058,20 +1078,55 @@ const API = window.BRACE_API_BASE || (/^web-[^.]+\./.test(location.host)
   }
 
   /* ── hostile-mode contention ──────────────────────────────────
-     When a run held a transaction open to force the freeze to be
-     measured (not assumed), say so plainly: the freeze above was
-     caused by a real held lock. This is the "watch it die" beat. */
+     Two honestly different outcomes, and the card must never conflate them:
+
+       enabled   the migration was OBSERVED queuing behind a real held lock,
+                 so the freeze above is a measured contended freeze — the
+                 "watch it die" beat.
+       requested but NOT enabled — hostile mode was asked for but the
+                 acquisition wait was never exercised (the hold never engaged,
+                 or the statement's lock level does not conflict with it). The
+                 numbers are a DEFAULT, uncontended run. Claiming a forced
+                 freeze here would flatly contradict the engine's own note. */
   function renderContention(card, ev) {
     var host = slot(card, 'contention');
     if (!host) return;
     var c = ev.contention;
     if (!c || !(c.enabled || c.requested)) return;
+    var tag = slot(card, 'contendTag');
+    var body = slot(card, 'contendText');
     var hold = c.hold_seconds != null ? c.hold_seconds : 0;
     var cycles = c.cycles != null ? c.cycles : 0;
-    slot(card, 'contendText').innerHTML =
-      'A transaction was held open for <b>' + num(hold) + 's</b> across <b>' + num(cycles) + '</b> ' +
-      (cycles === 1 ? 'cycle' : 'cycles') +
-      ', so the freeze above was forced by a real held lock — measured, not assumed.';
+    var cw = cycles === 1 ? 'cycle' : 'cycles';
+    var held = 'A transaction was held open for <b>' + num(hold) + 's</b> across <b>' +
+      num(cycles) + '</b> ' + cw;
+
+    if (c.enabled) {
+      if (tag) tag.textContent = 'hostile mode — contention held';
+      if ((ev.blocked_seconds || 0) > 0) {
+        // A real freeze landed while the migration queued behind the hold.
+        body.innerHTML = held +
+          ', and the migration was seen queuing behind it for its lock — so the freeze above ' +
+          'was forced by a real held lock, measured, not assumed.';
+      } else {
+        // Engaged (the migration waited), but no measurable freeze — say exactly
+        // that instead of pointing at a "freeze above" that is 0.0s.
+        body.innerHTML = held +
+          ', and the migration queued behind it for its lock — a genuinely contended run, ' +
+          'measured, not assumed, even though no freeze landed above.';
+      }
+    } else {
+      // Requested, did not engage. Lead with the engine's own reason.
+      if (tag) tag.textContent = 'hostile mode — requested, did not engage';
+      var reason = (c.note || '').replace(/[<>&]/g, '').trim() ||
+        'the migration never had to wait for its lock, so the contention was not exercised';
+      var lead = cycles > 0
+        ? held + ', but ' + reason + '.'
+        : 'Hostile mode was requested, but ' + reason + '.';
+      body.innerHTML = lead +
+        ' So these numbers are a default, uncontended run — read them that way, ' +
+        'not as a freeze forced under a held lock.';
+    }
     host.hidden = false;
   }
 

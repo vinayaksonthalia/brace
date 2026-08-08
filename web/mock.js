@@ -55,6 +55,13 @@
     }
     if (/CONCURRENTLY/.test(flat)) return { kind: 'run', mode: 'safe', shape: 'share_update_exclusive' };
     if (/^CREATE (UNIQUE )?INDEX /.test(flat)) return { kind: 'run', mode: 'naive', shape: 'share' };
+    // A catalog-only rename. Its lock is momentary and does not conflict with a
+    // held write transaction, so under hostile mode the acquisition wait is
+    // REQUESTED but never engaged — the honest "you asked, it did not exercise
+    // the wait" case the report card must not dress up as a forced freeze.
+    if (/^ALTER INDEX .+ RENAME\b/.test(flat) || /^ALTER TABLE .+ RENAME\b/.test(flat)) {
+      return { kind: 'run', mode: 'custom', shape: 'catalog_only' };
+    }
     // Passes the allowlist, but Postgres rejects it at execution — an
     // ERRORED run, not a rejected one. The engine mislabelling this as
     // UNSAFE is the single most misleading thing the tool could say, so
@@ -278,6 +285,18 @@
           out.effective_verdict = 'UNSAFE';
           out.monitor_blocked_seconds = r1(blockedSeconds * 0.98);
           out.note = 'With a transaction deliberately held open (8s across 3 cycles), the ACCESS EXCLUSIVE lock queued behind it and every write blocked for ' + r1(blockedSeconds) + 's. That is the real freeze this migration causes any time a transaction is in flight — which, on a live database, is always. Gate it behind a short lock_timeout with a retry, or avoid the table rewrite entirely.';
+          // The freeze here came from the HELD LOCK, not from row count, so the
+          // engine refuses to scale it: target_rows is set (the deployment always
+          // sets it) but the projection is Known()=false — projected 0, verdict "".
+          // The report must render NOTHING for this, never "~0.0s projected".
+          out.scale_projection = {
+            target_rows: 100000000,
+            projected_blocked_seconds: 0,
+            verdict: '',
+            model: 'access_exclusive_wait',
+            measured_at_floor: false,
+            scales_with_rows: false
+          };
         } else {
           out.verdict = 'SAFE';
           out.qualifier = 'acquisition_not_simulated';
@@ -292,6 +311,30 @@
             measured_at_floor: true
           };
           out.scale_warning = 'The twin measured a zero-length freeze because nothing was holding a lock. On a busy table this statement queues behind open transactions and blocks every new one until they commit — modelled here as a multi-second freeze. Measure it directly with hostile mode.';
+        }
+      } else if (r.shape === 'catalog_only') {
+        out.classification = 'alter_rename';
+        out.lock_modes = ['AccessExclusiveLock'];
+        out.verdict = 'SAFE';
+        out.effective_verdict = 'SAFE';
+        out.monitor_blocked_seconds = 0;
+        out.explanation = 'A rename only updates a catalog entry. It takes its ACCESS EXCLUSIVE lock for microseconds and scans or rewrites nothing, so there is no freeze to measure regardless of table size.';
+        if (hostile) {
+          // Requested contention that never engaged: the rename\'s lock does not
+          // conflict with the held write transaction, so it never had to queue.
+          // The verdict stays honestly SAFE, flagged so nobody reads these
+          // default numbers as "tested under contention and passed".
+          out.qualifier = 'contention_not_engaged';
+          out.contention = {
+            enabled: false,
+            requested: true,
+            hold_seconds: 8,
+            cycles: 3,
+            note: 'the migration never had to wait for its lock — its lock level does not conflict with the hold, so the acquisition wait was not exercised'
+          };
+          out.note = 'Hostile mode held a transaction open, but this statement never had to queue behind it for its lock, so the freeze you would feel under contention was not exercised. These numbers are a default, uncontended run — not proof this is safe under load.';
+        } else {
+          out.note = 'A catalog-only rename: no rows are scanned or rewritten, so there is no freeze on a twin of any size.';
         }
       }
 
