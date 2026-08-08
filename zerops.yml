@@ -148,3 +148,30 @@ zerops:
     run:
       os: alpine
       base: static
+
+  # ── mcp — the remote MCP endpoint ──────────────────────────────────────────
+  # A hosted Model Context Protocol server so any coding agent can crash-test a
+  # migration by URL, with nothing cloned or installed:
+  #   claude mcp add --transport http brace https://<mcp-subdomain>/mcp/
+  # It is a thin client over the api service, reached on the PRIVATE network
+  # (http://api:8080) — never the public internet.
+  - setup: mcp
+    build:
+      base: python@3.12
+      buildCommands:
+        - python3 -m venv .venv
+        - .venv/bin/pip install --no-cache-dir -r mcp/requirements.txt
+      deployFiles:
+        - mcp/server.py
+        - mcp/requirements.txt
+        - .venv
+    run:
+      base: python@3.12
+      ports:
+        - port: 8080
+          httpSupport: true
+      envVariables:
+        MCP_TRANSPORT: http
+        PORT: "8080"
+        BRACE_API: http://api:8080
+      start: .venv/bin/python mcp/server.py

@@ -6,10 +6,20 @@ lab (https://github.com/vinayaksonthalia/brace), which rehearses the SQL on a
 production-scale Postgres twin under live labeled write traffic and measures
 the damage.
 
-Run (stdio, for Claude Code / any MCP client):
-    fastmcp run mcp/server.py            # or: python mcp/server.py
-Config:
-    BRACE_API — lab base URL (defaults to the public lab)
+Two ways to run it:
+
+  Local (stdio) — clone the repo, then point any MCP client at this file:
+      python mcp/server.py
+      claude mcp add brace -- python /path/to/mcp/server.py
+
+  Remote (HTTP) — no clone required; an agent connects to a hosted URL:
+      MCP_TRANSPORT=http PORT=8080 python mcp/server.py
+      claude mcp add --transport http brace https://<host>/mcp/
+
+Config (env):
+    BRACE_API      — lab base URL (defaults to the public lab)
+    MCP_TRANSPORT  — "stdio" (default) or "http"
+    PORT           — HTTP port when MCP_TRANSPORT=http (default 8080)
 """
 
 import os
@@ -123,4 +133,10 @@ def lab_status() -> dict:
 
 
 if __name__ == "__main__":
-    mcp.run()
+    # stdio by default (local Claude Code / any MCP client). When deployed as a
+    # hosted service, MCP_TRANSPORT=http serves streamable HTTP at /mcp/ so an
+    # agent can connect by URL with nothing installed.
+    if os.environ.get("MCP_TRANSPORT", "stdio").lower() == "http":
+        mcp.run(transport="http", host="0.0.0.0", port=int(os.environ.get("PORT", "8080")))
+    else:
+        mcp.run()

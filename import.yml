@@ -28,3 +28,8 @@ services:
     type: static
     priority: 1
     enableSubdomainAccess: true # the public demo URL
+
+  - hostname: mcp
+    type: python@3.12
+    priority: 3
+    enableSubdomainAccess: true # remote MCP endpoint — agents connect by URL, no clone

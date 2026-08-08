@@ -26,3 +26,4 @@ scratch/
 # python
 __pycache__/
 *.pyc
+mcp/.venv/
