@@ -363,6 +363,47 @@ main{
 }
 .byos__hint{ margin:0; font-size:10px; line-height:1.5; color:var(--ink-3); }
 
+/* ── per-statement breakdown for a sequence run (inside the report card) ──
+   The card headline is the worst-of verdict; this strip shows every step so
+   you can see which one is the killer. Colour-keyed on each step's verdict. */
+.seqsteps{ margin:var(--s3) 0 0; border-top:1px solid var(--edge); padding-top:var(--s3); }
+.seqsteps__tag{
+  display:block; font-size:9.5px; letter-spacing:.16em; text-transform:uppercase;
+  color:var(--ink-3); margin-bottom:var(--s2);
+}
+.seqsteps__list{ list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:var(--s1); }
+.seqstep{
+  display:grid; grid-template-columns:auto minmax(0,1fr) auto auto; align-items:center; gap:var(--s2);
+  padding:var(--s2); border:1px solid var(--edge); border-left-width:3px; border-radius:var(--r-sm);
+  background:var(--panel-2);
+}
+.seqstep.is-safe{ border-left-color:var(--green); }
+.seqstep.is-unsafe{ border-left-color:var(--red); }
+.seqstep.is-skipped{ border-left-color:var(--ink-3); opacity:.65; }
+.seqstep.is-other{ border-left-color:var(--amber); }
+.seqstep__n{
+  font-family:var(--mono); font-size:11px; color:var(--ink-3); flex:none;
+  width:1.5em; height:1.5em; display:grid; place-items:center;
+  border:1px solid var(--edge); border-radius:50%;
+}
+.seqstep__sql{
+  font-family:var(--mono); font-size:11.5px; color:var(--ink-2);
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0;
+}
+.seqstep__verdict{
+  font-size:9px; letter-spacing:.1em; text-transform:uppercase; font-weight:600;
+  padding:2px 7px; border-radius:var(--r-pill); white-space:nowrap;
+}
+.is-safe .seqstep__verdict{ color:var(--green); border:1px solid var(--green); }
+.is-unsafe .seqstep__verdict{ color:var(--red); border:1px solid var(--red); }
+.is-skipped .seqstep__verdict{ color:var(--ink-3); border:1px solid var(--edge); }
+.is-other .seqstep__verdict{ color:var(--amber); border:1px solid var(--amber-dim); }
+.seqstep__stat{ font-family:var(--mono); font-size:10.5px; color:var(--ink-3); white-space:nowrap; font-variant-numeric:tabular-nums; }
+.seqstep__qual{
+  grid-column:1 / -1; font-size:9px; letter-spacing:.1em; text-transform:uppercase;
+  color:var(--amber); opacity:.85;
+}
+
 .console__foot{ padding:var(--s3) var(--gut) var(--gut); display:flex; align-items:center; gap:var(--s3); }
 .run{
   flex:1; cursor:pointer; font-family:inherit;

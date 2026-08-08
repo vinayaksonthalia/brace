@@ -162,7 +162,7 @@ document.documentElement.className+=' js';})();</script>
       <figure class="shot shot--wide">
         <div class="shot__frame">
           <img src="img/crash.gif" width="1200" height="724" loading="lazy" decoding="async"
-               alt="The Brace lab during a naive CREATE INDEX: the live write-rate chart craters from twelve thousand writes per second to zero the instant the lock lands, while the casualty counter climbs.">
+               alt="The Brace lab during a naive CREATE INDEX: the live write-rate chart craters from several thousand writes per second to zero the instant the lock lands, while the casualty counter climbs.">
         </div>
         <figcaption>A real run on the live lab — a naive <code>CREATE INDEX</code>: writes crater to zero on a throwaway twin while the casualty count climbs.</figcaption>
       </figure>
@@ -236,16 +236,17 @@ CREATE INDEX CONCURRENTLY idx_orders_customer_id ON orders (customer_id);</pre>
     <section class="doc-sec reveal" id="quickstart" data-title="Deploy your own">
       <p class="eyebrow">Deploy your own</p>
       <h2>Stand up your own Brace, or use the public lab.</h2>
-      <p class="doc-lede">Brace needs a real Postgres <strong>superuser</strong> — to create and drop twin databases every run — and native <code>CREATE DATABASE … TEMPLATE</code> cloning. Both are rare on managed Postgres and native to <a href="https://zerops.io" target="_blank" rel="noopener noreferrer">Zerops</a>. One <code>import.yml</code> stands up all three services.</p>
+      <p class="doc-lede">Brace needs a real Postgres <strong>superuser</strong> — to create and drop twin databases every run — and native <code>CREATE DATABASE … TEMPLATE</code> cloning. Both are rare on managed Postgres and native to <a href="https://zerops.io" target="_blank" rel="noopener noreferrer">Zerops</a>. One <code>import.yml</code> stands up all four services.</p>
 
       <div class="doc-code">
-        <div class="doc-code__cap"><b>deploy — three services: db, api, web</b></div>
-<pre>zcli project project-import ./import.yml   <span class="c"># db · api · web</span>
+        <div class="doc-code__cap"><b>deploy — four services: db, api, web, mcp</b></div>
+<pre>zcli project project-import ./import.yml   <span class="c"># db · api · web · mcp</span>
 zcli push --serviceId &lt;api-id&gt;             <span class="c"># setup: api — builds cmd/brace</span>
-zcli push --serviceId &lt;web-id&gt; --setup web --workingDir ./web</pre>
+zcli push --serviceId &lt;web-id&gt; --setup web --workingDir ./web
+zcli push --serviceId &lt;mcp-id&gt; --setup mcp <span class="c"># the hosted MCP endpoint (optional)</span></pre>
       </div>
 
-      <p>That is it: <code>db</code> (<code>postgresql@16</code>, dedicated 2–3&nbsp;vCPU, <code>NON_HA</code>), <code>api</code> (<code>go@1</code>), and <code>web</code> (static), wired by <code>zerops.yml</code> and <code>import.yml</code>. The api seeds its own 10M-row template on first boot; <code>/healthz</code> answers immediately, and <code>/api/*</code> reports <code>{"error":"starting"}</code> until the template is warm.</p>
+      <p>That is it: <code>db</code> (<code>postgresql@16</code>, dedicated 2–3&nbsp;vCPU, <code>NON_HA</code>), <code>api</code> (<code>go@1</code>), <code>web</code> (static), and <code>mcp</code> (<code>python@3.12</code>, the hosted MCP endpoint), wired by <code>zerops.yml</code> and <code>import.yml</code>. The api seeds its own 10M-row template on first boot; <code>/healthz</code> answers immediately, and <code>/api/*</code> reports <code>{"error":"starting"}</code> until the template is warm. The <code>mcp</code> service is optional — the lab, CLI and local MCP work without it.</p>
 
       <p>Prefer to try it before you deploy? The public lab needs no account and no login — paste a migration and watch it crash. Everything on this page is measured there.</p>
       <div class="dochero__cta" style="margin-top:var(--s5)">
@@ -409,7 +410,7 @@ zcli push --serviceId &lt;web-id&gt; --setup web --workingDir ./web</pre>
       </figure>
 
       <h3>What that looks like across common migrations</h3>
-      <p>One run, 10M-row twin, roughly 12,000 writes/sec baseline, on the hardware Brace was measured on (dedicated 2–3 vCPU, PostgreSQL 16):</p>
+      <p>One run, 10M-row twin, several thousand writes/sec baseline, on the hardware Brace was measured on (dedicated 2–3 vCPU, PostgreSQL 16):</p>
       <div class="doc-tablewrap">
         <table class="doc-table">
           <thead><tr><th>Migration</th><th>Verdict</th><th>Freeze</th><th>Writes killed</th></tr></thead>
@@ -542,8 +543,8 @@ brace-check -target-rows 500000000 -f migration.sql</pre>
 
       <div class="doc-code">
         <div class="doc-code__cap"><b>the verb an agent calls</b></div>
-<pre>check_migration(sql, target_rows=0, hostile=false,
-                statements=[], deadline_ms=0, wait_seconds=45)
+<pre>check_migration(sql, target_rows=0, hostile=false, statements=[],
+                deadline_ms=0, schema_ddl="", row_count=0, wait_seconds=45)
 <span class="c"># returns JSON the agent can branch on:</span>
 <span class="c">#   effective_verdict  → gate on THIS: worst-of measured + projected</span>
 <span class="c">#   verdict            → what was measured on the twin alone</span>
@@ -617,7 +618,7 @@ result = get_result(run_id)
       <p>The public lab carries one synthetic table — <code>orders</code>. A statement whose target relation isn't there is <strong>not</strong> blessed <code>SAFE</code>: a metadata-only shape that would otherwise fast-path to a clean pass comes back <code>REJECTED</code> instead, naming the missing relation and listing the tables the lab actually has —</p>
       <div class="doc-code">
         <div class="doc-code__cap"><b>REJECTED — nothing to rehearse, so nothing to bless</b></div>
-<pre>check_migration("DROP INDEX idx_users_email")
+<pre>check_migration("ALTER TABLE users ADD COLUMN verified boolean")
 <span class="c">{ "verdict": "REJECTED",</span>
 <span class="c">  "reason": "Relation \"users\" does not exist in the lab … The lab's tables are: orders.",</span>
 <span class="c">  "suggestion": "Target one of the lab's tables: orders." }</span></pre>
@@ -712,7 +713,7 @@ BRACE_LOAD_LABELS: >-             <span class="c"># describe your real write mix
       </div>
 
       <h3>Stand it up</h3>
-      <p>One <code>import.yml</code> stands up all three services on your own Zerops project — <code>web</code> (static), <code>api</code> (Go engine), and <code>db</code> (PostgreSQL 16). Brace needs a Postgres it <strong>owns</strong>: it creates and drops databases on every run, so don't point it at a server anything else depends on.</p>
+      <p>One <code>import.yml</code> stands up all four services on your own Zerops project — <code>web</code> (static), <code>api</code> (Go engine), <code>mcp</code> (the MCP endpoint), and <code>db</code> (PostgreSQL 16). Brace needs a Postgres it <strong>owns</strong>: it creates and drops databases on every run, so don't point it at a server anything else depends on.</p>
 
       <h3>Restore your dump as the template</h3>
       <p>Every disposable twin is cloned from a database named <code>brace_template</code> — the name is fixed, because the twin pool, the orphan sweep and the boot check all agree on it.</p>
@@ -753,7 +754,7 @@ pg_restore -U &lt;superuser&gt; -d brace_template your-dump.dump</pre>
       <div class="api">
         <div class="api-row">
           <div class="api-sig"><span class="api-verb api-verb--post">post</span><span class="api-path">/api/run</span></div>
-          <p class="api-desc">Rehearse one migration — or a whole script. Body: <code>{ sql, mode?, target_rows?, hostile?, lock_timeout_ms?, statements?, schema_ddl?, row_count? }</code>. Pass <code>statements: [ … ]</code> (an ordered array, ≤10) instead of <code>sql</code> to run a <strong>sequence</strong> on one twin; pass <code>schema_ddl</code> to rehearse against <a href="#byod">your own <code>CREATE TABLE</code></a>; <code>lock_timeout_ms</code> sets the per-request deadline a casualty is counted against. A run takes about ten seconds, so the call does not hold the request open: it returns <code>202 { run_id }</code> on admission, then the completed report card is read back from <code>GET /api/stats</code> as <code>last_run</code> and pushed live over the SSE stream. Everything else is a typed rejection with a <code>reason</code> — no raw or unexplained errors (see the status map below). A statement whose target relation does not exist is <strong>rejected</strong>, never blessed <code>SAFE</code>; <code>hostile</code> combined with <code>statements</code> is rejected too.</p>
+          <p class="api-desc">Rehearse one migration — or a whole script. Body: <code>{ sql, mode?, target_rows?, hostile?, lock_timeout_ms?, statements?, schema_ddl?, row_count? }</code>. Pass <code>statements: [ … ]</code> (an ordered array, ≤10) instead of <code>sql</code> to run a <strong>sequence</strong> on one twin; pass <code>schema_ddl</code> (one <code>CREATE TABLE</code>, with an optional <code>row_count</code>) to rehearse against <strong>your own table shape</strong> — the public lab builds an isolated throwaway table from it and seeds it with synthetic rows, no self-host required (distinct from <a href="#byod">bringing your own <em>data</em></a>, which needs self-hosting); <code>lock_timeout_ms</code> sets the per-request deadline a casualty is counted against. A run takes about ten seconds, so the call does not hold the request open: it returns <code>202 { run_id }</code> on admission, then the completed report card is read back from <code>GET /api/stats</code> as <code>last_run</code> and pushed live over the SSE stream. Everything else is a typed rejection with a <code>reason</code> — no raw or unexplained errors (see the status map below). A statement whose target relation does not exist is <strong>rejected</strong>, never blessed <code>SAFE</code>; <code>hostile</code> combined with <code>statements</code> is rejected too.</p>
         </div>
         <div class="api-row">
           <div class="api-sig"><span class="api-verb api-verb--get">get</span><span class="api-path">/api/stats</span></div>

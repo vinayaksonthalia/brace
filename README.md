@@ -76,12 +76,13 @@ Brace needs a real Postgres **superuser** (to create/drop twin databases) and na
 **Deploy your own:**
 
 ```sh
-zcli project project-import ./import.yml   # 3 services: db, api, web
+zcli project project-import ./import.yml   # 4 services: db, api, web, mcp
 zcli push --serviceId <api-id>             # setup: api — builds cmd/brace
 zcli push --serviceId <web-id> --setup web --workingDir ./web
+zcli push --serviceId <mcp-id> --setup mcp # the hosted MCP endpoint
 ```
 
-That's it — three services (`db`: `postgresql@16`, dedicated 2–3 vCPU, `NON_HA`; `api`: `go@1`; `web`: `static`), wired by `zerops.yml` and `import.yml` in this repo. The api seeds its own 10M-row template on first boot; `/healthz` answers immediately, `/api/*` reports `{"error":"starting"}` until the template is warm.
+That's it — four services (`db`: `postgresql@16`, dedicated 2–3 vCPU, `NON_HA`; `api`: `go@1`; `web`: `static`; `mcp`: `python@3.12`, the hosted MCP endpoint), wired by `zerops.yml` and `import.yml` in this repo. The api seeds its own 10M-row template on first boot; `/healthz` answers immediately, `/api/*` reports `{"error":"starting"}` until the template is warm. (The `mcp` service is optional — it only powers the remote MCP endpoint; the lab, CLI and local MCP work without it.)
 
 **Or just use the public lab** — no deploy, no login: **[web-2a61.prg1.zerops.app/lab.html](https://web-2a61.prg1.zerops.app/lab.html)**
 
@@ -165,7 +166,7 @@ One run, 10M-row twin, ~12k writes/sec baseline, real Zerops hardware (`db`: ded
 | `CREATE INDEX CONCURRENTLY` | 🟢 SAFE | 0.00s | 0 |
 | `VACUUM ANALYZE` | 🟢 SAFE | 0s | 0 |
 
-Freeze duration is measured two independent ways — write-rate collapse in the load generator, and `pg_stat_activity` / `pg_locks` sampled every 250ms during the run — and they're expected to agree (the run pictured above measured 28.0s both ways). A casualty is counted only for `SQLSTATE 55P03` (`lock_not_available`, PG16's `lock_timeout` error), never inferred from a slow response or a cancellation. The public lab is a shared, single-vCPU-class box, so the *magnitude* varies run to run with load — the **verdict** is the finding, the decimal is not; the numbers here are real ledger entries across many runs.
+Freeze duration is measured two independent ways — write-rate collapse in the load generator, and `pg_stat_activity` / `pg_locks` sampled every 250ms during the run — and they're expected to agree (the run pictured above measured 28.0s both ways). A casualty is counted only for `SQLSTATE 55P03` (`lock_not_available`, PG16's `lock_timeout` error), never inferred from a slow response or a cancellation. The public lab is one shared box — the `db` runs on dedicated 2–3 vCPU, but a single shared rig serialises everyone's runs, so the *magnitude* varies run to run with concurrent load. The **verdict** is the finding, the decimal is not; the numbers here are real ledger entries across many runs.
 
 ### The projection, because the twin is a sample
 
@@ -186,7 +187,7 @@ This is the real-world lock-acquisition cascade — the outage pattern nobody el
 |---|---|---|
 | **Web lab** | No login, presets or your own DDL, live charts | [`/lab.html`](https://web-2a61.prg1.zerops.app/lab.html) |
 | **`brace-check`** | The CI/deploy gate — exit 0 SAFE, exit 1 UNSAFE, exit 2 rejected/error | `cmd/brace-check` — `brace-check -f migration.sql [-target-rows N]` |
-| **MCP verb** | `check_migration(sql \| statements[], target_rows, hostile, deadline_ms)` + `get_result(run_id)` for a coding agent to call before it deploys a schema change | hosted, or `mcp/server.py` |
+| **MCP verb** | `check_migration(sql \| statements[], target_rows, hostile, deadline_ms, schema_ddl)` + `get_result(run_id)` + `lab_status()` for a coding agent to call before it deploys a schema change | hosted, or `mcp/server.py` |
 
 The MCP verb is the one that matters for Zerops' "infrastructure for coding agents" thesis: an agent that can write a migration in seconds should be able to ask "will this hurt?" in the same breath, against a real production-scale rehearsal — not a linter's guess.
 
@@ -227,12 +228,11 @@ internal/twins      — warm twin pool, CREATE DATABASE ... TEMPLATE cloning
 internal/boot       — env/config, BYOD template verification, label self-check
 internal/api        — HTTP handlers, SSE/status endpoints
 internal/qa         — hostile pentest suite against the casualty-counting logic
-web/                — static dashboard (landing + /lab.html)
-sql/                — schema/seed SQL for the template
+web/                — static dashboard (landing + /lab.html + /docs.html)
 docs/BYOD.md        — bring-your-own-dump walkthrough
 docs/LIMITATIONS.md — honest limits
-zerops.yml          — build/deploy recipe (api + web setups)
-import.yml          — 3-service project definition (db, api, web)
+zerops.yml          — build/deploy recipe (api + web + mcp setups)
+import.yml          — 4-service project definition (db, api, web, mcp)
 ```
 
 ## Learn more

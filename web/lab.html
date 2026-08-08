@@ -172,6 +172,22 @@ document.documentElement.setAttribute('data-theme',t);})();</script>
       </span>
     </label>
 
+    <!-- Multi-step sequence (optional, additive). A real migration is often a
+         whole script, not one statement. Paste it; Brace runs the steps IN
+         ORDER on ONE twin, so a later step sees the schema the earlier steps
+         produced, and reports a per-statement verdict plus the worst-of overall
+         — pinpointing which step is the killer. -->
+    <details class="byos seq" id="seqPanel">
+      <summary class="byos__summary">run a multi-step migration <span>(a sequence — optional)</span></summary>
+      <div class="byos__body">
+        <label class="sr" for="seqSql">Your migration script</label>
+        <textarea id="seqSql" class="byos__ddl" spellcheck="false" autocomplete="off"
+          autocorrect="off" autocapitalize="off" rows="6"
+          placeholder="-- one statement per line, separated by ;  (up to 10 steps)&#10;ALTER TABLE orders ADD COLUMN promo int;&#10;CREATE INDEX idx_orders_promo ON orders (promo);"></textarea>
+        <p class="byos__hint">Steps run in order on one twin, so a later step sees the schema the earlier ones produced. You get a verdict per step and the <b>worst-of</b> overall. When this is filled it takes precedence over the single statement above; hostile mode doesn't apply to a sequence.</p>
+      </div>
+    </details>
+
     <!-- Bring your own schema (optional, additive). The default flow runs
          against the demo's orders table; this lets a visitor rehearse the SAME
          migration against THEIR OWN table shape instead. Brace builds a

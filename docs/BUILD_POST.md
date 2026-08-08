@@ -39,7 +39,7 @@ The end state of both runs is identical (the same index exists), so the result c
 |---|---|
 | Verdict | **UNSAFE** |
 | Lock taken | `ShareLock` (blocks writes) |
-| Total write freeze | **27.8 s** |
+| Total write freeze | **28.0 s** |
 | Writes denied | **432** — 206 add-to-cart, 144 checkout, 82 login |
 
 Add `CONCURRENTLY`: `ShareUpdateExclusiveLock`, **0 s blocked, 0 denied.** Same index. Same data. One word.

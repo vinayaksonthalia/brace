@@ -52,13 +52,17 @@ const API = window.BRACE_API_BASE || (/^web-[^.]+\./.test(location.host)
 
     run: function (sql, opts) {
       opts = opts || {};
-      var body = { sql: sql };
-      if (opts.hostile) body.hostile = true;
+      var seq = opts.statements && opts.statements.length ? opts.statements : null;
+      var body = seq ? { statements: seq } : { sql: sql };
+      // Hostile mode holds one contended lock; a sequence runs many statements on
+      // one twin, so the two can't combine — the API rejects it. Never send both.
+      if (opts.hostile && !seq) body.hostile = true;
       if (opts.target_rows != null) body.target_rows = opts.target_rows;
       // Bring-your-own-schema: additive. When a CREATE TABLE is supplied the run
-      // rehearses against that shape instead of the demo's orders table.
-      if (opts.schema_ddl) body.schema_ddl = opts.schema_ddl;
-      if (opts.row_count != null) body.row_count = opts.row_count;
+      // rehearses against that shape instead of the demo's orders table. It is
+      // mutually exclusive with a sequence (the API rejects both together).
+      if (opts.schema_ddl && !seq) body.schema_ddl = opts.schema_ddl;
+      if (opts.row_count != null && !seq) body.row_count = opts.row_count;
       return fetch(API + '/api/run', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -481,6 +485,8 @@ const API = window.BRACE_API_BASE || (/^web-[^.]+\./.test(location.host)
     hostile: $('#hostileToggle'),
     schemaDdl: $('#schemaDdl'),
     rowCount: $('#rowCount'),
+    seqSql: $('#seqSql'),
+    seqPanel: $('#seqPanel'),
     cmdChip: $('#cmdChip'),
     runText: $('.run__text'),
     runHint: $('#runHint'),
@@ -1136,6 +1142,73 @@ const API = window.BRACE_API_BASE || (/^web-[^.]+\./.test(location.host)
     host.hidden = false;
   }
 
+  /* ── the per-statement breakdown for a sequence run ───────────
+     A sequence carries a `statements` array — each step's own verdict,
+     freeze and casualties. The card above shows the WORST-OF headline;
+     this strip shows the whole script so you can see which step is the
+     killer. Rendered on every card kind (safe/unsafe/errored/inconclusive)
+     so an errored sequence still names the step that failed. */
+  function renderSequence(card, ev) {
+    var steps = ev.statements;
+    if (!steps || !steps.length || !card) return;
+    var wrap = document.createElement('div');
+    wrap.className = 'seqsteps';
+    var tag = document.createElement('span');
+    tag.className = 'seqsteps__tag';
+    tag.textContent = 'sequence · ' + steps.length + ' steps · run in order on one twin';
+    wrap.appendChild(tag);
+    var ol = document.createElement('ol');
+    ol.className = 'seqsteps__list';
+    steps.forEach(function (s) {
+      var v = String(s.verdict || '').toUpperCase();
+      var cls = v === 'SAFE' ? 'is-safe'
+        : v === 'UNSAFE' ? 'is-unsafe'
+        : v === 'SKIPPED' ? 'is-skipped' : 'is-other';
+      var li = document.createElement('li');
+      li.className = 'seqstep ' + cls;
+
+      var n = document.createElement('span');
+      n.className = 'seqstep__n';
+      n.textContent = String((s.index != null ? s.index : 0) + 1);
+
+      var code = document.createElement('code');
+      code.className = 'seqstep__sql';
+      code.textContent = s.sql || '';
+
+      var badge = document.createElement('span');
+      badge.className = 'seqstep__verdict';
+      badge.textContent = v ? v.toLowerCase() : '—';
+
+      var stat = document.createElement('span');
+      stat.className = 'seqstep__stat';
+      if (s.error) {
+        stat.textContent = 'error';
+        stat.title = s.error;
+      } else if (v === 'SKIPPED') {
+        stat.textContent = 'not run';
+      } else {
+        var died = (s.casualties && s.casualties.total) || 0;
+        stat.textContent = secs(s.blocked_seconds || 0) + ' · ' + num(died) + ' died';
+      }
+
+      li.appendChild(n);
+      li.appendChild(code);
+      li.appendChild(badge);
+      li.appendChild(stat);
+      if (s.qualifier === 'acquisition_not_simulated') {
+        var q = document.createElement('span');
+        q.className = 'seqstep__qual';
+        q.textContent = 'acquisition not simulated';
+        li.appendChild(q);
+      }
+      ol.appendChild(li);
+    });
+    wrap.appendChild(ol);
+    var dur = slot(card, 'duration');
+    if (dur && dur.parentNode) dur.parentNode.insertBefore(wrap, dur);
+    else card.appendChild(wrap);
+  }
+
   /* ── errored / inconclusive — never a red UNSAFE badge ────────
      An errored run never executed, so it has no freeze and no
      casualties. Rendering it as UNSAFE (red, all-zero evidence) while
@@ -1149,6 +1222,7 @@ const API = window.BRACE_API_BASE || (/^web-[^.]+\./.test(location.host)
     var box = slot(card, 'errBox');
     if (box) box.textContent = ev.error || 'The database returned no error text.';
     renderTeach(card, ev, false);
+    renderSequence(card, ev);
     slot(card, 'duration').textContent = ev.duration_seconds != null
       ? 'migration ran ' + secs(ev.duration_seconds) + ' · twin discarded'
       : 'twin discarded';
@@ -1159,6 +1233,7 @@ const API = window.BRACE_API_BASE || (/^web-[^.]+\./.test(location.host)
     var card = tpl('tpl-inconclusive');
     card.querySelector('.card__id').textContent = ev.run_id ? 'run ' + ev.run_id : '';
     renderTeach(card, ev, false);
+    renderSequence(card, ev);
     slot(card, 'duration').textContent = ev.duration_seconds != null
       ? 'migration ran ' + secs(ev.duration_seconds) + ' · twin discarded'
       : 'twin discarded';
@@ -1233,6 +1308,7 @@ const API = window.BRACE_API_BASE || (/^web-[^.]+\./.test(location.host)
     renderWreckage(card, ev);
     renderProjection(card, ev, animate);
     renderContention(card, ev);
+    renderSequence(card, ev);
 
     slot(card, 'duration').textContent = ev.duration_seconds != null
       ? 'migration ran ' + secs(ev.duration_seconds) + ' · twin discarded'
@@ -1327,9 +1403,11 @@ const API = window.BRACE_API_BASE || (/^web-[^.]+\./.test(location.host)
     var cmdResetTimer = null;
     var curlFor = function () {
       var origin = API || location.origin;
-      var body = { sql: el.sql.value };
-      if (el.hostile && el.hostile.checked) body.hostile = true;
-      if (el.schemaDdl && el.schemaDdl.value.trim()) {
+      var seqRaw = (el.seqSql && el.seqSql.value.trim()) || '';
+      var seq = seqRaw ? seqRaw.split(';').map(function (s) { return s.trim(); }).filter(Boolean) : [];
+      var body = seq.length ? { statements: seq } : { sql: el.sql.value };
+      if (!seq.length && el.hostile && el.hostile.checked) body.hostile = true;
+      if (!seq.length && el.schemaDdl && el.schemaDdl.value.trim()) {
         body.schema_ddl = el.schemaDdl.value;
         if (el.rowCount && parseInt(el.rowCount.value, 10) > 0) body.row_count = parseInt(el.rowCount.value, 10);
       }
@@ -1389,14 +1467,23 @@ const API = window.BRACE_API_BASE || (/^web-[^.]+\./.test(location.host)
     if (state === 'running' || state === 'crash') return;
     var sql = el.sql.value;
     var hostile = !!(el.hostile && el.hostile.checked);
+    // Multi-step sequence, if the visitor pasted a script. Split on ';', trim,
+    // drop blanks. When present it takes precedence over the single statement:
+    // the run is a sequence on one twin, and the server validates each step.
+    var seqRaw = (el.seqSql && el.seqSql.value.trim()) || '';
+    var statements = seqRaw
+      ? seqRaw.split(';').map(function (s) { return s.trim(); }).filter(Boolean)
+      : [];
     // Bring-your-own-schema, if the visitor filled it in. Absent, the run is the
-    // ordinary orders flow, unchanged.
+    // ordinary orders flow, unchanged. Ignored when a sequence is present (the
+    // API rejects both together).
     var schemaDdl = (el.schemaDdl && el.schemaDdl.value.trim()) || '';
     var rowCount = 0;
     if (el.rowCount && el.rowCount.value.trim()) {
       var rc = parseInt(el.rowCount.value, 10);
       if (!isNaN(rc) && rc > 0) rowCount = rc;
     }
+    var displaySql = statements.length ? seqRaw : sql;
     clearNotice();
     dispatchedRunId = null;
     el.reportNote.textContent = 'dispatching';
@@ -1406,10 +1493,12 @@ const API = window.BRACE_API_BASE || (/^web-[^.]+\./.test(location.host)
     // run": show the panel rehearsing the SQL that was actually typed, so it
     // can never read as if an old report described the new input.
     setReportScope('live');
-    swapReport(function () { return dispatchingCard(sql); });
+    swapReport(function () { return dispatchingCard(displaySql); });
 
     var runOpts = { hostile: hostile };
-    if (schemaDdl) {
+    if (statements.length) {
+      runOpts.statements = statements;
+    } else if (schemaDdl) {
       runOpts.schema_ddl = schemaDdl;
       if (rowCount > 0) runOpts.row_count = rowCount;
     }
