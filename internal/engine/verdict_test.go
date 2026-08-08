@@ -2,6 +2,7 @@ package engine
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -182,6 +183,65 @@ func TestNoteForIsHonestAboutFailures(t *testing.T) {
 	res = &RunResult{BaselineWPS: 800, Verdict: VerdictSafe, InvalidIndexes: []string{"idx"}}
 	if note := noteFor(res, as, monitorReportStub()); note == "" {
 		t.Error("an INVALID index must be called out")
+	}
+}
+
+// TestExplanationForResolvesHostileContradiction pins the honesty fix: the
+// static lesson for a metadata-only ADD COLUMN promises "nothing here for Brace
+// to crash", which is right on the default path but flatly contradicts an UNSAFE
+// verdict when hostile mode actually froze traffic. explanationFor must leave the
+// default reading alone and retire the false all-clear only when contention
+// engaged and produced a freeze.
+func TestExplanationForResolvesHostileContradiction(t *testing.T) {
+	as, _ := Assess(`ALTER TABLE orders ADD COLUMN foo int`)
+	if as == nil {
+		t.Fatal("Assess returned no assessment for a metadata-only ADD COLUMN")
+	}
+	if as.Classification != ClassAddColumnConstDefault {
+		t.Fatalf("classification = %q, want %q", as.Classification, ClassAddColumnConstDefault)
+	}
+	const reassurance = "There is nothing here for Brace to crash."
+
+	// Direction 1 — default / uncontended run: the static lesson, reassuring tail
+	// included, is exactly the honest reading and must be returned verbatim.
+	uncontended := &RunResult{Verdict: VerdictSafe, BlockedSeconds: 0}
+	if got := explanationFor(uncontended, as); got != as.Lesson.Explanation {
+		t.Errorf("uncontended explanation was rewritten; must be unchanged:\n%s", got)
+	}
+	if !strings.Contains(explanationFor(uncontended, as), reassurance) {
+		t.Error("uncontended explanation must keep the reassuring conclusion")
+	}
+
+	// Direction 2 — hostile mode engaged AND the shape actually froze traffic. The
+	// card cannot say UNSAFE / frozen and "nothing to crash" at once.
+	contended := &RunResult{
+		Verdict:        VerdictUnsafe,
+		BlockedSeconds: 2.1,
+		Contention:     Contention{Requested: true, Enabled: true, HoldSeconds: 2},
+	}
+	got := explanationFor(contended, as)
+	if strings.Contains(got, reassurance) {
+		t.Errorf("contended explanation still contradicts the verdict:\n%s", got)
+	}
+	if !strings.Contains(got, "2.1s") {
+		t.Errorf("contended explanation must cite the measured freeze:\n%s", got)
+	}
+	if !strings.Contains(got, "queued for its lock") {
+		t.Errorf("contended explanation must land the acquisition-wait lesson:\n%s", got)
+	}
+	// The correct catalog-only mechanism half is educational and must survive.
+	if !strings.Contains(got, "catalog-only change") {
+		t.Errorf("contended explanation dropped the correct mechanism half:\n%s", got)
+	}
+
+	// Guard: contention requested but NOT engaged (no measured overlap) is still a
+	// default reading — the static text must stand, tail and all.
+	notEngaged := &RunResult{
+		Verdict:    VerdictSafe,
+		Contention: Contention{Requested: true, Enabled: false},
+	}
+	if got := explanationFor(notEngaged, as); got != as.Lesson.Explanation {
+		t.Errorf("contention-not-engaged explanation must be unchanged:\n%s", got)
 	}
 }
 

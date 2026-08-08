@@ -1151,6 +1151,12 @@ func (e *Engine) runOn(ctx context.Context, twin *twins.Twin, as *Assessment, mo
 	res.FailureMode = failureModeFor(res, monReport)
 	res.Qualifier = qualifierFor(res, as, monReport)
 	res.Note = noteFor(res, as, monReport)
+	// The explanation was seeded with the static per-class lesson at
+	// result-construction time. Revise it now, once the verdict, contention and
+	// freeze are final: a shape whose lesson promises "nothing here to crash" but
+	// that hostile mode actually made block must not keep contradicting the UNSAFE
+	// verdict on the same card. explanationFor leaves every other case untouched.
+	res.Explanation = explanationFor(res, as)
 
 	e.log.Info("engine.run_finished",
 		"run", state.RunID, "twin", twin.Name, "verdict", res.Verdict,
@@ -1302,6 +1308,42 @@ func failureModeFor(res *RunResult, mon monitor.Report) string {
 // a WRONG reading of the numbers come before the ones that merely add colour.
 func noteFor(res *RunResult, as *Assessment, mon monitor.Report) string {
 	return appendDeadlineNote(baseNote(res, as, mon), res)
+}
+
+// explanationFor keeps the static per-class lesson by default, but rewrites its
+// tail in the one case where the static text and the measurement contradict each
+// other on the same card.
+//
+// The metadata-only shapes (Lesson.TriviallySafe / BlocksWrites==false) close on
+// the same teaching move: the change is catalog-only, so "the risk is not the
+// lock itself, it is waiting to GET the lock behind a long-running query. There
+// is nothing here for Brace to crash." That conclusion is correct in isolation
+// and on the default path — but hostile mode holds exactly such a transaction
+// open, and when it actually engaged and froze traffic the card would otherwise
+// read UNSAFE / N.Ns frozen AND "nothing here to crash" at once. So in that one
+// case we strip the reassuring conclusion and land the measured wait instead —
+// the mechanism half of the text is right and stays put; only the false
+// all-clear is replaced, turning the contradiction into the lesson.
+//
+// Every other path (default / uncontended, or a shape whose lesson already
+// claims it blocks) is returned unchanged: there the "nothing to crash" tail
+// plus the acquisition_not_simulated qualifier is exactly the honest reading.
+func explanationFor(res *RunResult, as *Assessment) string {
+	base := as.Lesson.Explanation
+	claimsSafe := !as.Lesson.BlocksWrites || as.Lesson.TriviallySafe
+	froze := res.Verdict == VerdictUnsafe || res.BlockedSeconds > unsafeThresholdSeconds
+	if !res.Contention.Enabled || !claimsSafe || !froze {
+		return base
+	}
+	// Drop the reassuring conclusion if the lesson carries it, keeping the
+	// (correct) catalog-only mechanism that precedes it.
+	const reassurance = "There is nothing here for Brace to crash."
+	base = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(base), reassurance))
+	// Complement the note rather than repeat it: the note explains the hold and
+	// the pile-up; here we retire the class-level all-clear with this run's number.
+	return base + fmt.Sprintf(" In isolation that wait is nothing. Hostile mode held exactly such a "+
+		"transaction open — and this run measured the wait: writes froze for %.1fs while the statement "+
+		"queued for its lock, and everything behind it queued too.", res.BlockedSeconds)
 }
 
 // appendDeadlineNote labels the casualty count with the deadline that defines

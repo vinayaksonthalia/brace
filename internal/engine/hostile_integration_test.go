@@ -33,6 +33,12 @@ func TestHostileAddColumnMeasuresAcquisitionFreeze(t *testing.T) {
 		if !errors.As(err, &rej) || rej.Kind != RejectAlreadySafe {
 			t.Fatalf("non-hostile ADD COLUMN error = %v, want an already_safe rejection", err)
 		}
+		// The non-hostile path is untouched: no run, no contention, and the lesson
+		// it hands back still carries the reassuring conclusion in full — that text
+		// is correct precisely because nothing here was contended.
+		if !strings.Contains(rej.Reason, "There is nothing here for Brace to crash.") {
+			t.Errorf("non-hostile already_safe reason must keep the unchanged reassuring lesson:\n%s", rej.Reason)
+		}
 	}
 
 	// With hostile:true it must RUN — no rejection — and measure the freeze.
@@ -79,6 +85,23 @@ func TestHostileAddColumnMeasuresAcquisitionFreeze(t *testing.T) {
 	}
 	if res.LedgerID == 0 {
 		t.Error("a completed hostile run must still be recorded in the ledger")
+	}
+
+	// The explanation must not contradict the UNSAFE verdict. The static lesson
+	// for this shape ends on "There is nothing here for Brace to crash." — right
+	// on a default run, but a self-contradiction once hostile mode has actually
+	// frozen traffic. After measurement it must drop that all-clear and cite the
+	// freeze this run measured, while keeping the correct catalog-only mechanism.
+	t.Logf("explanation:\n%s", res.Explanation)
+	if strings.Contains(res.Explanation, "There is nothing here for Brace to crash.") {
+		t.Errorf("hostile UNSAFE explanation still claims nothing to crash — contradicts the verdict:\n%s",
+			res.Explanation)
+	}
+	if !strings.Contains(res.Explanation, "queued for its lock") {
+		t.Errorf("hostile explanation must reference the measured acquisition freeze:\n%s", res.Explanation)
+	}
+	if !strings.Contains(res.Explanation, "catalog-only change") {
+		t.Errorf("hostile explanation dropped the correct mechanism half of the lesson:\n%s", res.Explanation)
 	}
 }
 
