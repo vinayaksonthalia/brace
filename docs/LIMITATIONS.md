@@ -43,6 +43,23 @@ claiming to reproduce your specific traffic shape. `BRACE_LOAD_LABELS` lets
 you describe your own mix, but it is still a fixed set of parameterized
 statements, not a captured production workload.
 
+## The default run has no long-running transaction — hostile mode adds one
+
+A plain rehearsal runs the migration against writers only; nothing else holds
+a lock. That correctly measures a statement that freezes writes by *holding* a
+lock for a long time (a table rewrite, a `SHARE`-locked index build), but it
+under-states a statement that is only dangerous because it has to *wait* for a
+lock behind a long-running transaction — and then makes every write queue
+behind it. A metadata-only `ADD COLUMN` is instant on an idle twin, so the
+default run (and every linter) calls it safe, and Brace says so with the
+qualifier `acquisition_not_simulated` rather than an unqualified green light.
+**Hostile mode** (`BRACE_HOSTILE`, or `hostile: true` per run) holds a real
+transaction open on the twin while the migration runs, so that acquisition
+freeze is measured, not assumed. It is still a caricature of *one* held
+transaction — not your real concurrency — and if the migration's lock never
+actually conflicts with the hold, the run reports `contention_not_engaged`
+rather than inventing a freeze.
+
 ## One statement at a time
 
 Brace measures a single DDL statement per run. Multi-statement migrations,
