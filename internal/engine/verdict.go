@@ -33,6 +33,23 @@ const (
 	// under live traffic, which in production is itself a red flag.
 	VerdictInconclusive = "INCONCLUSIVE"
 
+	// QualifierAcquisitionNotSimulated marks a SAFE that is only SAFE about half
+	// the question. The statement takes AccessExclusiveLock — which conflicts
+	// with everything, including SELECT — but on an idle-ish twin it got that
+	// lock instantly and held it for microseconds, so nothing was measurably
+	// blocked. What decides the real freeze is how long the migration WAITS for
+	// the lock behind the longest transaction already on the table, and a default
+	// run does not simulate one. See hostile mode in loadgen/contend.go.
+	QualifierAcquisitionNotSimulated = "acquisition_not_simulated"
+
+	// FailureModeWritesErrored says the write rate collapsed because the traffic
+	// statements themselves started failing — not because a lock blocked them.
+	// The canonical case is a rename: after ALTER TABLE orders RENAME TO ...,
+	// every INSERT INTO orders fails 42P01 and the write rate goes to zero while
+	// no lock is held by anybody. Narrating that as a lock outage is wrong and,
+	// worse, hides the real finding.
+	FailureModeWritesErrored = "writes_errored"
+
 	// VerdictErrored is for a migration Postgres refused to run at all (bad
 	// syntax, permission denied, non-IMMUTABLE index expression, ...). Such a
 	// run measures nothing: it never held a lock, so blocked_seconds is
@@ -59,32 +76,74 @@ type RatePoint struct {
 }
 
 // longestBlockedWindow returns the length in seconds of the longest contiguous
-// stretch of samples whose rate is below threshold.
+// freeze, given the run's baseline write rate.
 //
 // Contiguous, not cumulative: two separate 0.6s dips are not a 1.2s outage, and
 // reporting them as one would be the kind of exaggeration that makes the whole
 // number untrustworthy. Each sample accounts for the interval since the
 // previous sample, so the first sample — which bounds no interval — is skipped.
-func longestBlockedWindow(points []RatePoint, threshold float64) float64 {
-	if threshold <= 0 || len(points) < 2 {
+//
+// The subtlety is the EDGES. A freeze almost never begins on a sample boundary,
+// so the interval it starts in carries part of a second's worth of writes and
+// lands above the collapse threshold — as does the interval the freeze ends in.
+// Counting whole sub-threshold intervals only, as this did originally, discards
+// both and under-reports every freeze by up to two sample intervals (500ms at
+// the default cadence): a genuine 1.2s outage measured 0.75s and shipped SAFE.
+//
+// Those two edge intervals are attributed proportionally instead. Within one
+// interval the writers are either flowing at roughly baseline or stopped dead,
+// so an observed rate of r over an interval of length dt means it was frozen for
+// dt * (1 - r/baseline). That estimate is applied ONLY to the interval either
+// side of a sub-threshold run — never to ordinary intervals, where the same
+// arithmetic would turn normal jitter into fictional freeze time.
+func longestBlockedWindow(points []RatePoint, baselineWPS float64) float64 {
+	if baselineWPS <= 0 || len(points) < 2 {
 		return 0
 	}
-	var best, cur float64
-	for i := 1; i < len(points); i++ {
-		dt := points[i].T - points[i-1].T
-		if dt <= 0 {
+	threshold := baselineWPS * collapseFraction
+	below := func(i int) bool {
+		return points[i].T-points[i-1].T > 0 && float64(points[i].WPS) < threshold
+	}
+
+	var best float64
+	for i := 1; i < len(points); {
+		if !below(i) {
+			i++
 			continue
 		}
-		if float64(points[i].WPS) < threshold {
-			cur += dt
-			if cur > best {
-				best = cur
-			}
-		} else {
-			cur = 0
+		run := edgeShare(points, i-1, baselineWPS)
+		for ; i < len(points) && below(i); i++ {
+			run += points[i].T - points[i-1].T
+		}
+		if i < len(points) {
+			run += edgeShare(points, i, baselineWPS)
+		}
+		if run > best {
+			best = run
 		}
 	}
 	return best
+}
+
+// edgeShare estimates how much of the interval ending at points[k] was frozen,
+// from how far its averaged rate fell short of baseline. Zero for the interval
+// before the first sample, which has no length to divide.
+func edgeShare(points []RatePoint, k int, baselineWPS float64) float64 {
+	if k < 1 || k >= len(points) {
+		return 0
+	}
+	dt := points[k].T - points[k-1].T
+	if dt <= 0 {
+		return 0
+	}
+	frac := 1 - float64(points[k].WPS)/baselineWPS
+	if frac <= 0 {
+		return 0
+	}
+	if frac > 1 {
+		frac = 1
+	}
+	return dt * frac
 }
 
 // blockedSecondsFrom computes the freeze window over the migration's own
@@ -108,7 +167,7 @@ func blockedSecondsFrom(points []RatePoint, ddlStartT, baselineWPS float64) floa
 			window = append(window, p)
 		}
 	}
-	return roundSeconds(longestBlockedWindow(window, baselineWPS*collapseFraction))
+	return roundSeconds(longestBlockedWindow(window, baselineWPS))
 }
 
 // verdictFor is the single place SAFE and UNSAFE are decided.

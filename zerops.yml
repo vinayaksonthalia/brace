@@ -90,6 +90,48 @@ zerops:
         # Template size. Ten million unindexed rows is what makes a naive
         # CREATE INDEX take long enough to be an outage rather than a blip.
         SEED_ROWS: "10000000"
+        # The scale projection's denominator-in-reverse: how many rows the table
+        # this migration is really destined for holds. The twin is a SAMPLE, and
+        # a freeze measured on a sample is not the freeze production gets — this
+        # is the number that turns "0.2s here" into "~2s on a 100M-row table"
+        # and lets the projection veto a SAFE.
+        #
+        # A public lab has no way to know any visitor's real table size, so this
+        # is Brace's stock ASSUMPTION and every projection built on it is
+        # labelled as one (scale_projection.target_rows_assumed = true, and the
+        # warning text says so in words). Callers who know better send
+        # target_rows on the run request, or a self-hoster sets this to their
+        # own number — either way the label changes with it.
+        #
+        # Leaving it unset does NOT disable the projection: the process falls
+        # back to the same assumed 100,000,000 (boot.DefaultAssumedTargetRows).
+        # It is written here so the deployment's value is visible rather than
+        # implicit.
+        BRACE_TARGET_ROWS: "100000000"
+        # The simulated request deadline on write traffic: a write that waits
+        # longer than this for its lock is counted a casualty. It is the whole
+        # definition of the casualty number, which is why every result reports
+        # it back as casualties.deadline_ms. Per-run override: lock_timeout_ms.
+        BRACE_LOCK_TIMEOUT_MS: "1500"
+        # Hostile mode, deliberately OFF here.
+        #
+        # With it on, Brace holds a transaction open on the load target while the
+        # migration runs, so a fast DDL has to QUEUE for its AccessExclusiveLock
+        # — which is the thing that actually takes production down, because every
+        # statement arriving after that queued request waits behind it too.
+        # It is off by default because it changes the question the run answers
+        # ("this migration behind a 2s transaction" rather than "this migration"),
+        # and a number that moved because of a Brace flag has to be one the caller
+        # asked for. Callers turn it on per run with {"hostile": true}; a
+        # deployment can default it on with BRACE_HOSTILE: "on".
+        #
+        # With it off, a run whose statement takes ACCESS EXCLUSIVE and measured
+        # no freeze does NOT ship a bare SAFE: it carries
+        # qualifier="acquisition_not_simulated" and a note saying which half of
+        # the risk was measured.
+        BRACE_HOSTILE: "off"
+        # Per-cycle hold for hostile mode, when it is on.
+        BRACE_HOSTILE_HOLD_MS: "2000"
       start: ./app
       # /healthz answers as soon as the listener is up — deliberately before
       # the template has finished seeding, which on a cold project takes

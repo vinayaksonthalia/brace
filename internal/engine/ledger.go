@@ -42,6 +42,10 @@ CREATE TABLE IF NOT EXISTS brace_runs (
 	error               text
 );
 CREATE INDEX IF NOT EXISTS brace_runs_created_at_idx ON brace_runs (created_at DESC);
+-- casualties_total is meaningless without the deadline that defines a casualty,
+-- so history rows carry it too. ADD COLUMN IF NOT EXISTS with a constant default
+-- is catalog-only on PG11+ — the one ALTER TABLE this product may run on itself.
+ALTER TABLE brace_runs ADD COLUMN IF NOT EXISTS casualty_deadline_ms bigint NOT NULL DEFAULT 0;
 `
 
 // RunRecord is one row of history, as the API serves it.
@@ -56,10 +60,14 @@ type RunRecord struct {
 	DurationSeconds   float64          `json:"duration_seconds"`
 	CasualtiesTotal   int64            `json:"casualties_total"`
 	CasualtiesByLabel map[string]int64 `json:"casualties_by_label"`
-	BaselineWPS       int64            `json:"baseline_writes_per_sec"`
-	LockModes         []string         `json:"lock_modes"`
-	Twin              string           `json:"twin"`
-	Error             string           `json:"error,omitempty"`
+	// CasualtyDeadlineMS is the simulated request deadline those casualties were
+	// counted against. Rows written before this column existed report 0, which
+	// means "unrecorded", not "no deadline".
+	CasualtyDeadlineMS int64    `json:"casualty_deadline_ms"`
+	BaselineWPS        int64    `json:"baseline_writes_per_sec"`
+	LockModes          []string `json:"lock_modes"`
+	Twin               string   `json:"twin"`
+	Error              string   `json:"error,omitempty"`
 }
 
 // Ledger is the run history store.
@@ -97,13 +105,14 @@ func (l *Ledger) Insert(ctx context.Context, r *RunResult) (int64, error) {
 	err = l.pool.QueryRow(ctx, `
 		INSERT INTO brace_runs
 			("sql", mode, classification, verdict, blocked_seconds, duration_seconds,
-			 casualties_total, casualties_by_label, baseline_wps, lock_modes, twin, error)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12)
+			 casualties_total, casualties_by_label, baseline_wps, lock_modes, twin, error,
+			 casualty_deadline_ms)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12,$13)
 		RETURNING id`,
 		r.SQL, string(r.Mode), string(r.Classification), r.Verdict,
 		r.BlockedSeconds, r.DurationSeconds,
 		r.Casualties.Total, string(byLabel), r.BaselineWPS, modes, r.Twin,
-		nullIfEmpty(r.Error),
+		nullIfEmpty(r.Error), r.Casualties.DeadlineMS,
 	).Scan(&id)
 	if err != nil {
 		return 0, fmt.Errorf("engine: insert run: %w", err)
@@ -122,7 +131,8 @@ func (l *Ledger) List(ctx context.Context, limit int) ([]RunRecord, error) {
 	rows, err := l.pool.Query(ctx, `
 		SELECT id, created_at, "sql", mode, classification, verdict,
 		       blocked_seconds, duration_seconds, casualties_total,
-		       casualties_by_label, baseline_wps, lock_modes, twin, coalesce(error,'')
+		       casualties_by_label, baseline_wps, lock_modes, twin, coalesce(error,''),
+		       casualty_deadline_ms
 		FROM brace_runs
 		ORDER BY created_at DESC, id DESC
 		LIMIT $1`, limit)
@@ -141,7 +151,8 @@ func (l *Ledger) List(ctx context.Context, limit int) ([]RunRecord, error) {
 		)
 		if err := rows.Scan(&rec.ID, &rec.CreatedAt, &rec.SQL, &mode, &class, &rec.Verdict,
 			&rec.BlockedSeconds, &rec.DurationSeconds, &rec.CasualtiesTotal,
-			&byLabel, &rec.BaselineWPS, &rec.LockModes, &rec.Twin, &rec.Error); err != nil {
+			&byLabel, &rec.BaselineWPS, &rec.LockModes, &rec.Twin, &rec.Error,
+			&rec.CasualtyDeadlineMS); err != nil {
 			return nil, fmt.Errorf("engine: scan run: %w", err)
 		}
 		rec.Mode = Mode(mode)

@@ -45,6 +45,21 @@ const (
 	seedTolerance = 0.9
 
 	connectTimeout = 30 * time.Second
+
+	// DefaultAssumedTargetRows is the production table size Brace assumes when
+	// nobody states one. A hundred million rows is a deliberately ordinary
+	// number for a table somebody is nervous enough about to rehearse a
+	// migration against — big enough that a freeze measured on a ten-million-row
+	// twin scales into an outage, small enough not to be alarmist.
+	//
+	// It is an ASSUMPTION ABOUT SOMEBODY ELSE'S DATABASE and is labelled as one
+	// in every output that carries it (scale_projection.target_rows_assumed).
+	// Its job is to make the false-safe defence work out of the box; it is not a
+	// claim, and it is never presented as measured.
+	DefaultAssumedTargetRows = 100_000_000
+
+	// DefaultLockTimeout is the simulated request deadline on write traffic.
+	DefaultLockTimeout = 1500 * time.Millisecond
 )
 
 // Config is the resolved environment.
@@ -63,8 +78,27 @@ type Config struct {
 	// their REAL table has. The twin is a sample, and a freeze measured on a
 	// sample is not the freeze production gets — this is the number that lets
 	// Brace say "0.2s here means ~10s on yours" instead of shipping a false SAFE.
-	// 0 (the default) means unstated, and no projection is made.
+	//
+	// It is never 0 in practice: unset falls back to DefaultAssumedTargetRows so
+	// the false-safe defence is on by default, and TargetRowsAssumed then marks
+	// every projection built on it as an assumption rather than a fact about the
+	// caller's database.
 	TargetRows int64
+	// TargetRowsAssumed is true when nobody set BRACE_TARGET_ROWS and the
+	// fallback above is in use.
+	TargetRowsAssumed bool
+
+	// LockTimeout is BRACE_LOCK_TIMEOUT_MS: the request deadline the simulated
+	// application enforces on its writes, and therefore the definition of a
+	// casualty. Defaults to 1500ms; every run reports the value it used.
+	LockTimeout time.Duration
+
+	// Hostile is BRACE_HOSTILE: run every rehearsal against a deliberately
+	// contended table, so a fast DDL has to queue for its lock. Default OFF —
+	// see loadgen.Contender for why it changes what the numbers mean.
+	Hostile bool
+	// HostileHold is BRACE_HOSTILE_HOLD_MS, the per-cycle hold. Default 2000ms.
+	HostileHold time.Duration
 
 	// Seed is false in bring-your-own-data mode (BRACE_SEED=off, or
 	// SEED_ROWS=0). The template is then whatever a human restored into
@@ -93,9 +127,21 @@ func FromEnv() (Config, error) {
 	}
 
 	// BRACE_TARGET_ROWS is optional and deliberately forgiving: a garbled value
-	// costs the deployment its scale projection, not its startup. It is logged
-	// as unset either way by the caller.
+	// costs the deployment its scale projection, not its startup.
+	//
+	// Unset is NOT "no projection". A lab whose headline false-safe defence is
+	// off unless somebody remembered an environment variable is a lab that ships
+	// the false safe, so an unstated size falls back to a stock assumption and
+	// every projection built on it is labelled as assumed, everywhere it appears.
 	c.TargetRows = int64(envInt("BRACE_TARGET_ROWS", 0))
+	if c.TargetRows <= 0 {
+		c.TargetRows = DefaultAssumedTargetRows
+		c.TargetRowsAssumed = true
+	}
+
+	c.LockTimeout = envDuration("BRACE_LOCK_TIMEOUT_MS", DefaultLockTimeout)
+	c.Hostile = envBool("BRACE_HOSTILE", false)
+	c.HostileHold = envDuration("BRACE_HOSTILE_HOLD_MS", loadgen.DefaultHold)
 
 	// Bring-your-own-data. Both knobs are resolved before anything touches the
 	// database, so a malformed value is a startup error and never a half-seeded
@@ -250,19 +296,28 @@ func Open(ctx context.Context, cfg Config, phase Phase) (*Lab, error) {
 	// be the truth rather than the intent.
 	if cfg.TargetRows > 0 && stats.Rows > 0 {
 		log.Info("boot.scale_projection", "twin_rows", stats.Rows, "target_rows", cfg.TargetRows,
+			"assumed", cfg.TargetRowsAssumed,
 			"ratio", float64(cfg.TargetRows)/float64(stats.Rows))
-	} else if cfg.TargetRows == 0 {
+	} else {
 		log.Info("boot.scale_projection_disabled", "twin_rows", stats.Rows,
-			"note", "set BRACE_TARGET_ROWS to your production table's row count to have runs projected onto it")
+			"note", "no twin row count, so nothing can be projected")
+	}
+	targetSource := engine.TargetSourceDeployment
+	if cfg.TargetRowsAssumed {
+		targetSource = engine.TargetSourceAssumed
 	}
 	eng, err := engine.New(ctx, engine.Config{
-		AdminURL:          cfg.AdminURL,
-		Twins:             mgr,
-		Workers:           cfg.Workers,
-		Labels:            cfg.Labels,
-		TwinRows:          stats.Rows,
-		DefaultTargetRows: cfg.TargetRows,
-		Logger:            log,
+		AdminURL:            cfg.AdminURL,
+		Twins:               mgr,
+		Workers:             cfg.Workers,
+		Labels:              cfg.Labels,
+		TwinRows:            stats.Rows,
+		DefaultTargetRows:   cfg.TargetRows,
+		DefaultTargetSource: targetSource,
+		LockTimeout:         cfg.LockTimeout,
+		Hostile:             cfg.Hostile,
+		HostileHold:         cfg.HostileHold,
+		Logger:              log,
 	})
 	if err != nil {
 		lab.Close(context.WithoutCancel(ctx))
@@ -454,6 +509,36 @@ func envInt(key string, def int) int {
 		return def
 	}
 	return n
+}
+
+// envDuration reads a millisecond count. Absent, unparseable or non-positive
+// values fall back to the default: a mistyped knob must not silently disable the
+// thing it configures.
+func envDuration(key string, def time.Duration) time.Duration {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return def
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 {
+		return def
+	}
+	return time.Duration(n) * time.Millisecond
+}
+
+// envBool accepts the spellings an operator actually types. Anything else is the
+// default, because a typo in BRACE_HOSTILE must not quietly change what the
+// numbers mean.
+func envBool(key string, def bool) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
+	case "":
+		return def
+	case "on", "true", "1", "yes":
+		return true
+	case "off", "false", "0", "no":
+		return false
+	}
+	return def
 }
 
 func firstNonEmpty(vals ...string) string {

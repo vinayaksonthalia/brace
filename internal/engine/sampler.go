@@ -20,6 +20,16 @@ type sample struct {
 	at   time.Time
 	ok   int64
 	died int64
+	// erred is the cumulative unattributable-failure count. It is sampled for
+	// the same reason died is: a grand total cannot say WHEN the failures
+	// happened, and "writes failed during the DDL" and "writes failed while the
+	// pool was warming" are different findings.
+	erred int64
+	// diedBy is the per-label cumulative casualty count. Small map, allocated
+	// once per sample; the alternative is a grand total that cannot be windowed
+	// onto the DDL, which is how a write killed during the recovery phase used
+	// to force UNSAFE.
+	diedBy map[string]int64
 }
 
 type sampler struct {
@@ -82,11 +92,19 @@ func (s *sampler) stop() {
 func (s *sampler) take() {
 	st := s.gen.Snapshot()
 	var ok int64
-	for _, ls := range st.ByLabel {
+	diedBy := make(map[string]int64, len(st.ByLabel))
+	for name, ls := range st.ByLabel {
 		ok += ls.OK
+		diedBy[name] = ls.Died
 	}
 	s.mu.Lock()
-	s.samples = append(s.samples, sample{at: time.Now(), ok: ok, died: st.CasualtiesTotal})
+	s.samples = append(s.samples, sample{
+		at:     time.Now(),
+		ok:     ok,
+		died:   st.CasualtiesTotal,
+		erred:  st.ErroredTotal,
+		diedBy: diedBy,
+	})
 	s.mu.Unlock()
 }
 
@@ -118,6 +136,27 @@ func (s *sampler) points() []RatePoint {
 		})
 	}
 	return out
+}
+
+// atDDLStart returns the cumulative counters as they stood when the migration
+// began — the last sample taken before the DDL window opens.
+//
+// It is the subtrahend that windows the casualty count onto the migration, the
+// same way blockedSecondsFrom windows the freeze. Without it the two headline
+// numbers describe different stretches of time: a write killed while the pool
+// was warming, or during the recovery observation after the DDL committed, is
+// not the migration's casualty and must not force UNSAFE on its own.
+func (s *sampler) atDDLStart(ddlStartT float64) sample {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var base sample
+	for _, sm := range s.samples {
+		if roundSeconds(sm.at.Sub(s.begin).Seconds()) >= ddlStartT {
+			break
+		}
+		base = sm
+	}
+	return base
 }
 
 // rateBetween is the derived write rate across a wall-clock window, used to

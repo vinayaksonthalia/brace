@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -107,7 +108,39 @@ const (
 	migratorConnTimeout   = 15 * time.Second
 	defaultHistoryLimit   = 20
 	maxLedgerErrorLength  = 4000
+
+	// maxHostileHold bounds a per-run contention hold. A hold approaching the run
+	// budget would starve the migration of any chance to complete and turn every
+	// hostile run into an INCONCLUSIVE, which measures nothing.
+	maxHostileHold = 15 * time.Second
+	// maxLockTimeout bounds a per-run simulated deadline. Past this the traffic
+	// stops being a model of an application: nothing with a request behind it
+	// waits half a minute for a row lock.
+	maxLockTimeout = 30 * time.Second
+	// contentionWait bounds how long the run waits for the contention source to
+	// actually be holding a lock before starting the DDL. Reaching it means
+	// hostile mode did not engage, and the report says so rather than claiming a
+	// contended run it did not get.
+	contentionWait = 10 * time.Second
 )
+
+// Contention is what Brace did to make the migration compete for its lock.
+type Contention struct {
+	// Enabled is whether hostile mode ran AND achieved a hold. False means the
+	// migration was measured against an uncontended table — the default, and the
+	// thing Qualifier warns about for AccessExclusive shapes.
+	Enabled bool `json:"enabled"`
+	// Requested is whether hostile mode was asked for. Requested && !Enabled is
+	// the honest "you asked and we could not deliver" case.
+	Requested bool `json:"requested"`
+	// HoldSeconds is how long each cycle held its transaction open. Every number
+	// in a hostile run is conditional on it.
+	HoldSeconds float64 `json:"hold_seconds,omitempty"`
+	// Cycles is how many hold/commit cycles completed.
+	Cycles int64 `json:"cycles,omitempty"`
+	// Note explains, in one line, what the reader is looking at.
+	Note string `json:"note,omitempty"`
+}
 
 // Config configures an Engine.
 type Config struct {
@@ -126,9 +159,21 @@ type Config struct {
 	// BRACE_LOAD_LABELS), which is the only way the casualty counts describe
 	// their application rather than ours.
 	Labels []loadgen.LabelSpec
-	// LockTimeout is the simulated request deadline on write traffic.
-	// Defaults to 1500ms.
+	// LockTimeout is the simulated request deadline on write traffic: a write
+	// that waits longer than this for its lock is counted as a casualty.
+	// Defaults to 1500ms, and every casualty count is reported alongside the
+	// value that produced it, because it IS the definition of a casualty.
+	// Overridable per run with WithLockTimeout.
 	LockTimeout time.Duration
+	// Hostile turns contention on by default for every run: while the migration
+	// executes, Brace holds a transaction open against the load target so that a
+	// fast DDL has to QUEUE for its lock instead of taking it instantly. OFF by
+	// default — it makes the run answer a harsher question, and a number that
+	// changed because of a Brace flag must be something the caller asked for.
+	Hostile bool
+	// HostileHold is how long each contention cycle holds its lock.
+	// Defaults to loadgen.DefaultHold (2s).
+	HostileHold time.Duration
 	// SettleDuration is how long load runs before the baseline is taken.
 	// Defaults to 2s.
 	SettleDuration time.Duration
@@ -158,6 +203,11 @@ type Config struct {
 	// BRACE_TARGET_ROWS: "my real orders table has 500,000,000 rows". Every run
 	// is projected onto it unless the caller overrides it per-run. 0 = unset.
 	DefaultTargetRows int64
+	// DefaultTargetSource says where DefaultTargetRows came from — one of the
+	// TargetSource* constants. It is carried all the way into the report so an
+	// assumed size is never rendered as a fact about the caller's database.
+	// Empty is read as TargetSourceDeployment.
+	DefaultTargetSource string
 	// MaxRunDuration bounds the whole measured rehearsal (everything after the
 	// twin is acquired, up to and including the recovery observation). A run that
 	// exceeds it is aborted — the migration is cancelled, load is stopped, the
@@ -196,6 +246,12 @@ func (c *Config) applyDefaults() {
 	if c.MaxRunDuration <= 0 {
 		c.MaxRunDuration = defaultMaxRunDuration
 	}
+	if c.HostileHold <= 0 {
+		c.HostileHold = loadgen.DefaultHold
+	}
+	if c.DefaultTargetSource == "" {
+		c.DefaultTargetSource = TargetSourceDeployment
+	}
 	if c.Logger == nil {
 		c.Logger = slog.Default()
 	}
@@ -205,6 +261,12 @@ func (c *Config) applyDefaults() {
 type Casualties struct {
 	Total   int64            `json:"total"`
 	ByLabel map[string]int64 `json:"by_label"`
+	// DeadlineMS is the simulated request deadline these deaths are relative to
+	// — the lock_timeout the load pool ran with. It is part of the number, not
+	// metadata about it: the same freeze kills nobody in an application that
+	// sets no deadline and kills several times as many in one that allows 200ms.
+	// Every rendering of Total has to carry it.
+	DeadlineMS int64 `json:"deadline_ms"`
 }
 
 // RunResult is one rehearsal's finding. The JSON tags are the frozen contract
@@ -251,6 +313,19 @@ type RunResult struct {
 	Suggestion     string         `json:"suggestion,omitempty"`
 	PredictedSafe  bool           `json:"predicted_safe"`
 	Note           string         `json:"note,omitempty"`
+	// Qualifier names what this run did NOT establish, when a bare verdict would
+	// overclaim. Today there is one: QualifierAcquisitionNotSimulated, the SAFE
+	// that only means "nothing was holding the table when we asked". Empty when
+	// the verdict stands on its own.
+	Qualifier string `json:"qualifier,omitempty"`
+	// FailureMode names why traffic stopped when the cause was not a lock — see
+	// FailureModeWritesErrored. Empty in the ordinary case.
+	FailureMode string `json:"failure_mode,omitempty"`
+	// Contention describes the concurrent transaction Brace held open against
+	// the load target during the DDL, if any. Enabled=false is the default and
+	// means the run measured the migration against an otherwise-uncontended
+	// table — see Qualifier.
+	Contention Contention `json:"contention"`
 
 	// --- the evidence ---
 	BaselineWPS int64 `json:"baseline_writes_per_sec"`
@@ -264,8 +339,16 @@ type RunResult struct {
 	MonitorBlockedSeconds float64        `json:"monitor_blocked_seconds"`
 	Monitor               monitor.Report `json:"monitor"`
 	// ErroredTotal is writes that failed for reasons we could NOT attribute to
-	// a lock. Never folded into casualties.
+	// a lock, across the whole run. Never folded into casualties.
 	ErroredTotal int64 `json:"errored_total"`
+	// ErroredDuringDDL is the same count windowed onto the migration, which is
+	// what distinguishes "your migration broke the application's SQL" from
+	// "something was already failing before it started".
+	ErroredDuringDDL int64 `json:"errored_during_ddl"`
+	// CasualtiesAllPhases is the run's grand total of lock-killed writes,
+	// including the settle and recovery phases. Casualties above is windowed to
+	// the DDL; this is here so the difference is visible rather than lost.
+	CasualtiesAllPhases int64 `json:"casualties_all_phases"`
 	// InvalidIndexes are indexes left INVALID by a failed CONCURRENTLY build.
 	InvalidIndexes []string `json:"invalid_indexes,omitempty"`
 	// Timeline is the 250ms trace; DDLStartT and DDLEndT delimit the migration
@@ -522,7 +605,13 @@ func (e *Engine) setPhase(phase string) {
 // variadic so that adding one never breaks a caller, and so the common case
 // (Rehearse(ctx, sql, mode)) still reads as one line.
 func (e *Engine) Rehearse(ctx context.Context, sql string, mode Mode, opts ...RunOption) (*RunResult, error) {
-	ro := runOptions{TargetRows: e.cfg.DefaultTargetRows}
+	ro := runOptions{
+		TargetRows:   e.cfg.DefaultTargetRows,
+		TargetSource: e.cfg.DefaultTargetSource,
+		Hostile:      e.cfg.Hostile,
+		HostileHold:  e.cfg.HostileHold,
+		LockTimeout:  e.cfg.LockTimeout,
+	}
 	for _, opt := range opts {
 		if opt != nil {
 			opt(&ro)
@@ -596,6 +685,16 @@ type runOptions struct {
 	// rejected: the projection is an extra, and refusing to rehearse a migration
 	// because a row count was mistyped would be the wrong trade.
 	TargetRows int64
+	// TargetSource records who supplied TargetRows; see the TargetSource*
+	// constants.
+	TargetSource string
+	// Hostile runs this rehearsal against a deliberately contended table.
+	Hostile bool
+	// HostileHold is how long each contention cycle holds its lock.
+	HostileHold time.Duration
+	// LockTimeout is the simulated request deadline for this run's traffic — the
+	// definition of a casualty. Zero means the deployment's default.
+	LockTimeout time.Duration
 }
 
 // WithTargetRows answers "what about MY table?" for one run. Non-positive or
@@ -605,7 +704,46 @@ func WithTargetRows(n int64) RunOption {
 	return func(o *runOptions) {
 		if v := validTargetRows(n); v > 0 {
 			o.TargetRows = v
+			o.TargetSource = TargetSourceRequest
 		}
+	}
+}
+
+// WithHostile turns the contention source on or off for one run, overriding the
+// deployment's default either way. Hostile mode is what makes a fast DDL have to
+// WAIT for its lock — see loadgen.Contender and the Qualifier field.
+func WithHostile(on bool) RunOption {
+	return func(o *runOptions) { o.Hostile = on }
+}
+
+// WithHostileHold sets how long each contention cycle holds its lock. Ignored
+// when non-positive. Values are clamped to maxHostileHold, because a hold longer
+// than the run budget would guarantee an INCONCLUSIVE and measure nothing.
+func WithHostileHold(d time.Duration) RunOption {
+	return func(o *runOptions) {
+		if d <= 0 {
+			return
+		}
+		if d > maxHostileHold {
+			d = maxHostileHold
+		}
+		o.HostileHold = d
+	}
+}
+
+// WithLockTimeout sets the simulated request deadline for one run: the wait
+// after which a blocked write is counted dead. It is the single largest lever on
+// the casualty count, which is why it is both configurable and reported.
+// Non-positive values leave the deployment's default; absurd ones are clamped.
+func WithLockTimeout(d time.Duration) RunOption {
+	return func(o *runOptions) {
+		if d <= 0 {
+			return
+		}
+		if d > maxLockTimeout {
+			d = maxLockTimeout
+		}
+		o.LockTimeout = d
 	}
 }
 
@@ -664,10 +802,17 @@ func (e *Engine) runOn(ctx context.Context, twin *twins.Twin, as *Assessment, mo
 		return nil, fmt.Errorf("engine: derive traffic DSN: %w", err)
 	}
 	e.setPhase(phaseWarming)
+	// The simulated request deadline. It defines what a casualty IS, so it is
+	// pinned on the result before anything is counted against it.
+	lockTimeout := ro.LockTimeout
+	if lockTimeout <= 0 {
+		lockTimeout = e.cfg.LockTimeout
+	}
+	res.Casualties.DeadlineMS = lockTimeout.Milliseconds()
 	gen, err := loadgen.New(runCtx, loadgen.Config{
 		DSN:         trafDSN,
 		Workers:     e.cfg.Workers,
-		LockTimeout: e.cfg.LockTimeout,
+		LockTimeout: lockTimeout,
 		Labels:      e.cfg.Labels,
 		Logger:      e.cfg.Logger,
 	})
@@ -732,6 +877,52 @@ func (e *Engine) runOn(ctx context.Context, twin *twins.Twin, as *Assessment, mo
 	e.mu.Unlock()
 	e.log.Info("engine.baseline", "run", state.RunID, "wps", res.BaselineWPS)
 
+	// 4b. Hostile mode. The baseline is deliberately already measured: contention
+	// costs throughput, and folding that into the baseline would make the freeze
+	// look smaller than it was. From here until the DDL returns, one session
+	// holds a transaction open against the load target, so the migration's lock
+	// request has to queue behind it — and every write that arrives after that
+	// request queues behind the request. That pile-up is the outage this rig
+	// otherwise cannot produce, and it is the whole reason a fast DDL is
+	// dangerous in production.
+	res.Contention = Contention{Requested: ro.Hostile}
+	stopContention := func() {}
+	defer func() { stopContention() }()
+	if ro.Hostile {
+		hold := ro.HostileHold
+		if hold <= 0 {
+			hold = e.cfg.HostileHold
+		}
+		con := loadgen.NewContender(loadgen.ContendConfig{
+			DSN:       trafDSN,
+			Statement: loadgen.ContentionStatement(e.cfg.Labels),
+			Hold:      hold,
+			Logger:    e.cfg.Logger,
+		})
+		if err := con.Start(runCtx); err != nil {
+			// Contention is the run's premise, not an optional extra: continuing
+			// without it would produce a number labelled hostile that is not.
+			e.log.Warn("engine.contender_unavailable", "run", state.RunID, "err", err)
+			res.Contention.Note = "the contention session could not be started"
+		} else {
+			waitCtx, cancelWait := context.WithTimeout(runCtx, contentionWait)
+			holding := con.WaitHolding(waitCtx)
+			cancelWait()
+			stopContention = func() {
+				stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), teardownTimeout)
+				defer cancel()
+				st := con.Stop(stopCtx)
+				res.Contention.Cycles = st.Cycles
+				res.Contention.HoldSeconds = st.HoldSeconds
+			}
+			res.Contention.Enabled = holding
+			res.Contention.HoldSeconds = hold.Seconds()
+			if !holding {
+				res.Contention.Note = "no lock was ever held within the wait budget"
+			}
+		}
+	}
+
 	// 5. The monitor, then the crash.
 	mon := monitor.New(monitor.Config{
 		DSN:      twin.DSN,
@@ -773,6 +964,9 @@ func (e *Engine) runOn(ctx context.Context, twin *twins.Twin, as *Assessment, mo
 	_, ddlErr := migConn.Exec(runCtx, as.SQL)
 	t1 := time.Now()
 	res.DDLEndT = smp.since(t1)
+	// Contention ends with the DDL. The recovery observation is meant to show
+	// traffic coming back, and a session still taking locks would smear that.
+	stopContention()
 	res.DurationSeconds = roundSeconds(t1.Sub(t0).Seconds())
 	guarded := ddlErr != nil && guardFired()
 	if ddlErr != nil {
@@ -813,6 +1007,14 @@ func (e *Engine) runOn(ctx context.Context, twin *twins.Twin, as *Assessment, mo
 	// 9. The verdict.
 	res.Timeline = smp.points()
 	res.BlockedSeconds = blockedSecondsFrom(res.Timeline, res.DDLStartT, baseline)
+	// Casualties are windowed onto the migration, exactly like blocked_seconds:
+	// the counters as they stood when the DDL began, subtracted from the final
+	// ones. The run's grand total is kept alongside rather than thrown away.
+	atStart := smp.atDDLStart(res.DDLStartT)
+	res.Casualties = windowedCasualties(final, atStart, lockTimeout)
+	res.CasualtiesAllPhases = final.CasualtiesTotal
+	res.ErroredTotal = final.ErroredTotal
+	res.ErroredDuringDDL = final.ErroredTotal - atStart.erred
 	res.Verdict = verdictFor(res.BlockedSeconds, res.Casualties.Total)
 	if res.Error != "" && !guarded {
 		// Postgres refused the statement: nothing was measured, so no SAFE/UNSAFE
@@ -835,9 +1037,6 @@ func (e *Engine) runOn(ctx context.Context, twin *twins.Twin, as *Assessment, mo
 	if len(monReport.LockModes) > 0 {
 		res.LockModes = monReport.LockModes
 	}
-	res.Casualties = casualtiesFrom(final)
-	res.ErroredTotal = final.ErroredTotal
-
 	// 10. The scale layer. The twin is a SAMPLE, and a freeze measured on a
 	// sample is not the freeze production gets: lock presence is scale-free, lock
 	// duration is not. Verdict above stays exactly what was measured;
@@ -849,10 +1048,15 @@ func (e *Engine) runOn(ctx context.Context, twin *twins.Twin, as *Assessment, mo
 		ScalesWithRows: as.Lesson.ScalesWithRows,
 		BlocksWrites:   as.Lesson.BlocksWrites,
 		Verdict:        res.Verdict,
+		TargetSource:   ro.TargetSource,
 	})
 	res.EffectiveVerdict = effectiveVerdict(res.Verdict, res.ScaleProjection)
 	res.ScaleWarning = scaleWarning(res.Verdict, res.ScaleProjection)
 
+	// 11. The narrative. FailureMode and Qualifier are decided before the note,
+	// because both change what the note is allowed to claim.
+	res.FailureMode = failureModeFor(res, monReport)
+	res.Qualifier = qualifierFor(res, as, monReport)
 	res.Note = noteFor(res, as, monReport)
 
 	e.log.Info("engine.run_finished",
@@ -861,7 +1065,11 @@ func (e *Engine) runOn(ctx context.Context, twin *twins.Twin, as *Assessment, mo
 		"projected_blocked_s", res.ScaleProjection.ProjectedBlockedSeconds,
 		"target_rows", res.ScaleProjection.TargetRows,
 		"blocked_s", res.BlockedSeconds, "monitor_blocked_s", res.MonitorBlockedSeconds,
-		"casualties", res.Casualties.Total, "errored", res.ErroredTotal,
+		"casualties", res.Casualties.Total, "casualties_all_phases", res.CasualtiesAllPhases,
+		"deadline_ms", res.Casualties.DeadlineMS,
+		"errored", res.ErroredTotal, "errored_during_ddl", res.ErroredDuringDDL,
+		"hostile", res.Contention.Enabled, "qualifier", res.Qualifier,
+		"failure_mode", res.FailureMode,
 		"duration_s", res.DurationSeconds, "lock_modes", res.LockModes,
 		"migration_error", res.Error)
 
@@ -890,10 +1098,131 @@ func casualtiesFrom(s loadgen.Stats) Casualties {
 	return c
 }
 
+// windowedCasualties subtracts the counters as they stood when the migration
+// began, so the reported deaths are the ones the migration caused. Negative
+// differences are impossible from monotonic counters but are clamped anyway: a
+// negative casualty count is the kind of number that destroys trust in every
+// other number on the page.
+func windowedCasualties(final loadgen.Stats, atStart sample, deadline time.Duration) Casualties {
+	c := casualtiesFrom(final)
+	c.DeadlineMS = deadline.Milliseconds()
+	c.Total = nonNegative(c.Total - atStart.died)
+	for name := range c.ByLabel {
+		c.ByLabel[name] = nonNegative(c.ByLabel[name] - atStart.diedBy[name])
+	}
+	return c
+}
+
+func nonNegative(n int64) int64 {
+	if n < 0 {
+		return 0
+	}
+	return n
+}
+
+// takesAccessExclusive reports whether this run has grounds to believe the
+// statement takes PostgreSQL's strongest lock — either the teach layer says so
+// from the shape, or the monitor watched it happen.
+func takesAccessExclusive(as *Assessment, mon monitor.Report) bool {
+	if as != nil && as.Lesson.ExpectedLock == "AccessExclusiveLock" {
+		return true
+	}
+	for _, m := range mon.LockModes {
+		if m == "AccessExclusiveLock" {
+			return true
+		}
+	}
+	return false
+}
+
+// qualifierFor decides whether this run's SAFE is the whole answer.
+//
+// It is not, for the entire class of statements whose danger is the WAIT rather
+// than the work: DROP INDEX, ALTER INDEX ... RENAME, a metadata-only ALTER
+// TABLE. Each takes AccessExclusiveLock, which conflicts with every other mode
+// including plain SELECT. On a twin where nothing holds a transaction open they
+// get that lock instantly, do a catalog write, and release — nobody waits, no
+// interval collapses, verdict SAFE. In production the same statement queues
+// behind the longest open transaction on the table, and every statement that
+// arrives after it queues behind IT.
+//
+// A default run does not simulate that transaction, so it cannot say anything
+// about it. Saying nothing would leave a bare green light on the most
+// misunderstood class of migration there is; this says which half was measured.
+func qualifierFor(res *RunResult, as *Assessment, mon monitor.Report) string {
+	if res.Verdict != VerdictSafe {
+		return ""
+	}
+	if res.Contention.Enabled {
+		// Contention was real and the statement still did not freeze traffic.
+		// That is a measurement, not an assumption.
+		return ""
+	}
+	if !takesAccessExclusive(as, mon) {
+		return ""
+	}
+	if res.BlockedSeconds > 0 || res.Casualties.Total > 0 {
+		// A hold WAS measured; the verdict is about something that happened.
+		return ""
+	}
+	return QualifierAcquisitionNotSimulated
+}
+
+// failureModeFor separates "a lock stopped the writes" from "the writes stopped
+// working". They look identical on the write-rate trace and mean opposite
+// things.
+//
+// The canonical case is a rename. After ALTER TABLE orders RENAME TO
+// orders_renamed, every INSERT INTO orders fails with 42P01; the rate goes to
+// zero, no lock is held by anybody, and the casualty count stays at zero because
+// nothing waited on a lock. Reading that as an outage caused by ACCESS EXCLUSIVE
+// is wrong and buries the real finding.
+func failureModeFor(res *RunResult, mon monitor.Report) string {
+	if res.ErroredDuringDDL <= 0 || res.Casualties.Total > 0 {
+		return ""
+	}
+	if res.BlockedSeconds <= 0 {
+		// Nothing to misattribute.
+		return ""
+	}
+	// Only when the server itself says nobody was ever waiting. A degraded or
+	// never-started monitor is not evidence of absence, and in that case the
+	// conservative lock narrative stands.
+	if mon.Samples == 0 || mon.BlockedPeakCount > 0 || mon.BlockedSeconds > 0 {
+		return ""
+	}
+	return FailureModeWritesErrored
+}
+
 // noteFor adds the one line of context the numbers cannot carry themselves.
 // Every branch here is about being honest when the evidence is thin or the
 // measurement disagrees with the prediction.
+//
+// Order is precedence: the first true branch wins, so the branches that correct
+// a WRONG reading of the numbers come before the ones that merely add colour.
 func noteFor(res *RunResult, as *Assessment, mon monitor.Report) string {
+	return appendDeadlineNote(baseNote(res, as, mon), res)
+}
+
+// appendDeadlineNote labels the casualty count with the deadline that defines
+// it. A casualty is a write that waited longer than this run's simulated
+// lock_timeout — an application that sets none suffers the same freeze with zero
+// casualties, and one with a 200ms budget suffers many times more. The number is
+// meaningless without the assumption, so they travel together.
+func appendDeadlineNote(note string, res *RunResult) string {
+	if res.Casualties.Total <= 0 || res.Casualties.DeadlineMS <= 0 {
+		return note
+	}
+	line := fmt.Sprintf("The %d killed writes are writes that waited longer than the %dms request deadline "+
+		"this run simulated; with a different deadline the freeze is the same and this count is not.",
+		res.Casualties.Total, res.Casualties.DeadlineMS)
+	if note == "" {
+		return line
+	}
+	return note + " " + line
+}
+
+func baseNote(res *RunResult, as *Assessment, mon monitor.Report) string {
 	switch {
 	case res.Verdict == VerdictInconclusive:
 		return "Brace stopped the run at its time limit: the migration never acquired its lock while traffic " +
@@ -907,6 +1236,16 @@ func noteFor(res *RunResult, as *Assessment, mon monitor.Report) string {
 		// signal is the INVALID leftover it left behind, not merely "it failed".
 		return "A CONCURRENTLY build left an INVALID index behind. It costs write overhead but will never be used " +
 			"by a query — drop it and retry."
+	case res.FailureMode == FailureModeWritesErrored:
+		// The write rate collapsed and no lock was held by anyone: the traffic's
+		// own statements stopped working. Narrating a lock outage here would be
+		// false, and it would bury the finding that actually matters.
+		return fmt.Sprintf("Writes stopped, but NOT because of a lock: the monitor saw nobody waiting, and no write "+
+			"was killed by the request deadline. %d writes failed outright — the statements the application sends no "+
+			"longer match the schema this migration produced (a renamed or dropped object is the usual cause). That is "+
+			"exactly what a live application still referencing the old name would suffer, so the code that uses the new "+
+			"name has to be deployed and able to serve traffic BEFORE this migration runs. The lock itself was cheap; "+
+			"the incompatibility is the outage.", res.ErroredDuringDDL)
 	case res.Error != "":
 		return "The migration itself failed, so the freeze measurement covers only the time before it gave up."
 	case res.BaselineWPS == 0:
@@ -915,15 +1254,52 @@ func noteFor(res *RunResult, as *Assessment, mon monitor.Report) string {
 	case res.Verdict == VerdictUnsafe && !as.Lesson.BlocksWrites:
 		return "This statement blocked writes even though its shape usually does not. Worth reading the timeline " +
 			"rather than trusting the pattern."
+	case res.Contention.Requested && !res.Contention.Enabled:
+		// Asked for hostile, did not get it. The numbers are a default run's and
+		// must not be read as anything harsher.
+		return "Hostile mode was requested but did not engage (" + res.Contention.Note + "), so these numbers " +
+			"describe an UNCONTENDED table — read them as a default run, not as a contended one."
+	case res.Contention.Enabled && res.Verdict == VerdictUnsafe:
+		return fmt.Sprintf("This is a HOSTILE-mode measurement: Brace held a transaction open on the load target for "+
+			"%.1fs at a time, so the migration had to queue for its lock — and every write that arrived after that "+
+			"queued request waited behind it. That pile-up is the %.2fs freeze above. It is a measurement of this "+
+			"migration behind a %.1fs transaction, not a property of the migration alone: if nothing on your table "+
+			"ever stays open that long, the freeze is shorter, and if something stays open longer, it is longer.",
+			res.Contention.HoldSeconds, res.BlockedSeconds, res.Contention.HoldSeconds)
+	case res.Contention.Enabled && res.Verdict == VerdictSafe:
+		return fmt.Sprintf("Measured with contention: Brace held a transaction open on the load target for %.1fs at a "+
+			"time while the migration ran, and writes still kept flowing. That is the acquisition risk tested rather "+
+			"than assumed away — the strongest green light this rig can give.", res.Contention.HoldSeconds)
+	case res.Qualifier == QualifierAcquisitionNotSimulated:
+		// The false-SAFE this rig used to ship. Placed above the scale warning
+		// because for these shapes the scale projection is suppressed anyway (the
+		// work is constant-time) and the acquisition wait is the whole story.
+		return fmt.Sprintf("No freeze was measured — and this run did not test the thing that actually makes %s "+
+			"dangerous. It takes ACCESS EXCLUSIVE, which conflicts with every other lock mode including plain SELECT. "+
+			"Here it got that lock instantly because nothing was holding the table. In production it waits behind your "+
+			"longest open transaction, and because PostgreSQL grants locks in arrival order, every query that arrives "+
+			"after it waits too — the table stops until that transaction ends. The freeze you would see is the length "+
+			"of that transaction, which this run did not simulate. Re-run with hostile mode (hostile: true, or "+
+			"BRACE_HOSTILE=on) to measure it.", strings.TrimSpace(as.Lesson.Title))
 	case res.ScaleWarning != "":
 		// Placed above the generic "on a larger table it is held for longer"
 		// hand-wave below: when the operator has told us their real size we can
 		// say how much longer, with a number, and that sentence is the note.
 		return res.ScaleWarning
-	case res.Verdict == VerdictSafe && as.Lesson.BlocksWrites && res.Casualties.Total == 0:
+	case res.Verdict == VerdictSafe && as.Lesson.BlocksWrites && res.Casualties.Total == 0 && as.Lesson.ScalesWithRows:
 		return "No freeze was measured, but this shape does take a blocking lock — on this twin the statement " +
-			"finished faster than the write traffic could notice. On a larger table the same lock is held for longer. " +
-			"Set BRACE_TARGET_ROWS (or pass target_rows) and Brace will project this measurement onto your real size."
+			"finished faster than the write traffic could notice. Its work is O(rows), so on a larger table the same " +
+			"lock is held for longer. Set BRACE_TARGET_ROWS (or pass target_rows) and Brace will project this " +
+			"measurement onto your real size."
+	case res.Verdict == VerdictSafe && as.Lesson.BlocksWrites && res.Casualties.Total == 0:
+		// Constant-time shapes. Telling this reader that a bigger table makes it
+		// worse would be false — and the advice that follows it (set
+		// BRACE_TARGET_ROWS) yields a suppressed projection anyway, because
+		// scaling a catalog write by row count models nothing.
+		return "No freeze was measured, and this shape's work does not grow with the table: it is a catalog change, " +
+			"the same microseconds at ten thousand rows and at a billion. A bigger table does not make it slower, so " +
+			"there is no scale projection to make. The remaining risk is the wait to ACQUIRE the lock behind whatever " +
+			"is already running — re-run with hostile mode to measure that."
 	case mon.Degraded():
 		return "The lock monitor lost some samples, so its figures are a floor. The write-rate measurement is " +
 			"unaffected."

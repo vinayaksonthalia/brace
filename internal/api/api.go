@@ -554,7 +554,8 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 // so /api/report/{id} and /api/history return the same shape.
 const reportColumns = `id, created_at, "sql", mode, classification, verdict,
 	blocked_seconds, duration_seconds, casualties_total,
-	casualties_by_label, baseline_wps, lock_modes, twin, coalesce(error,'')`
+	casualties_by_label, baseline_wps, lock_modes, twin, coalesce(error,''),
+	casualty_deadline_ms`
 
 func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 	idStr := strings.TrimPrefix(r.URL.Path, "/api/report/")
@@ -610,7 +611,8 @@ func (s *Server) reportByID(ctx context.Context, id int64) (*engine.RunRecord, e
 	err := pool.QueryRow(ctx, `SELECT `+reportColumns+` FROM brace_runs WHERE id = $1`, id).
 		Scan(&rec.ID, &rec.CreatedAt, &rec.SQL, &mode, &class, &rec.Verdict,
 			&rec.BlockedSeconds, &rec.DurationSeconds, &rec.CasualtiesTotal,
-			&byLabel, &rec.BaselineWPS, &rec.LockModes, &rec.Twin, &rec.Error)
+			&byLabel, &rec.BaselineWPS, &rec.LockModes, &rec.Twin, &rec.Error,
+			&rec.CasualtyDeadlineMS)
 	if err != nil {
 		return nil, err
 	}
@@ -633,6 +635,37 @@ type runRequest struct {
 	// ignored silently and the deployment's BRACE_TARGET_ROWS stands — a
 	// mistyped row count must never cost somebody a rehearsal.
 	TargetRows int64 `json:"target_rows,omitempty"`
+	// Hostile asks for a contended rehearsal: while the migration runs, the lab
+	// holds a transaction open on the load target so a fast DDL has to QUEUE for
+	// its lock instead of taking it instantly. A pointer so that absent means
+	// "whatever the deployment defaults to" (off, unless BRACE_HOSTILE=on) while
+	// an explicit false can turn it off again.
+	Hostile *bool `json:"hostile,omitempty"`
+	// HostileHoldMS is how long each contention cycle holds its lock. Ignored
+	// unless hostile mode is on. 0 = the deployment's default (2000ms).
+	HostileHoldMS int64 `json:"hostile_hold_ms,omitempty"`
+	// LockTimeoutMS is the simulated request deadline on the write traffic — the
+	// wait after which a blocked write counts as a casualty. It IS the definition
+	// of the casualty number, so it is per-run configurable and reported back as
+	// casualties.deadline_ms. 0 = the deployment's default (1500ms).
+	LockTimeoutMS int64 `json:"lock_timeout_ms,omitempty"`
+}
+
+// runOptions turns the request's per-run knobs into engine options. Every one of
+// them is forgiving: an out-of-range value falls back to the deployment default
+// rather than costing the caller a rehearsal.
+func (r runRequest) runOptions() []engine.RunOption {
+	opts := []engine.RunOption{engine.WithTargetRows(r.TargetRows)}
+	if r.Hostile != nil {
+		opts = append(opts, engine.WithHostile(*r.Hostile))
+	}
+	if r.HostileHoldMS > 0 {
+		opts = append(opts, engine.WithHostileHold(time.Duration(r.HostileHoldMS)*time.Millisecond))
+	}
+	if r.LockTimeoutMS > 0 {
+		opts = append(opts, engine.WithLockTimeout(time.Duration(r.LockTimeoutMS)*time.Millisecond))
+	}
+	return opts
 }
 
 type outcome struct {
@@ -711,9 +744,9 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	// with the request would leave a twin under load.
 	resCh := make(chan outcome, 1)
 	sql := req.SQL
-	targetRows := req.TargetRows
+	opts := req.runOptions()
 	go func() {
-		res, err := eng.Rehearse(s.runCtx, sql, mode, engine.WithTargetRows(targetRows))
+		res, err := eng.Rehearse(s.runCtx, sql, mode, opts...)
 		resCh <- outcome{res: res, err: err}
 	}()
 

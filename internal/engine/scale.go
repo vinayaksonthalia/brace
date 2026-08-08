@@ -37,6 +37,22 @@ const maxTargetRows = 1e12
 // nobody has to read this file to know what they are trusting.
 const ScaleModelLinear = "linear in row count (index build and table rewrite are both O(rows))"
 
+// Where TargetRows came from. It is published because the three cases carry
+// very different weight: a number the caller sent for THIS run is a fact about
+// their table, a number the deployment was configured with is an operator's
+// standing statement, and the built-in default is Brace guessing on behalf of
+// somebody who has not told us anything. The last one must never read as
+// measured, or as knowledge about the reader's database.
+const (
+	// TargetSourceRequest: target_rows on the run request.
+	TargetSourceRequest = "request"
+	// TargetSourceDeployment: the operator's BRACE_TARGET_ROWS.
+	TargetSourceDeployment = "deployment"
+	// TargetSourceAssumed: nobody said, so the public lab's stock assumption was
+	// used to make the false-safe defence work by default.
+	TargetSourceAssumed = "brace_default_assumption"
+)
+
 // ScaleProjection is the modelled answer to "what does this migration cost on MY
 // table?", as distinct from the measured answer to "what did it cost on this
 // twin?".
@@ -51,6 +67,14 @@ type ScaleProjection struct {
 	TwinRows int64 `json:"twin_rows"`
 	// TargetRows is the operator's production table size. 0 = unset.
 	TargetRows int64 `json:"target_rows"`
+	// TargetRowsSource says who supplied TargetRows — see TargetSource*. Empty
+	// when there is no target at all.
+	TargetRowsSource string `json:"target_rows_source,omitempty"`
+	// TargetRowsAssumed is true when nobody supplied a size and Brace used its
+	// stock assumption. Every rendering of this projection has to say so: it is
+	// an assumption ABOUT THE READER'S TABLE, and presenting it as anything
+	// firmer would be inventing a fact.
+	TargetRowsAssumed bool `json:"target_rows_assumed"`
 	// MeasuredBlockedSeconds is the freeze the instrument saw on the twin. It is
 	// a copy of RunResult.BlockedSeconds, kept here so the projection is
 	// self-contained in a report.
@@ -109,6 +133,8 @@ type scaleInputs struct {
 	// Verdict is the measured verdict, used to refuse projecting from a run that
 	// measured nothing.
 	Verdict string
+	// TargetSource is one of the TargetSource* constants.
+	TargetSource string
 }
 
 // projectScale computes the projection for one run.
@@ -133,6 +159,10 @@ func projectScale(in scaleInputs) ScaleProjection {
 		Model:                  ScaleModelLinear,
 		ScalesWithRows:         in.ScalesWithRows,
 		MeasuredAtFloor:        in.Measured <= scaleFloorSeconds,
+	}
+	if p.TargetRows > 0 {
+		p.TargetRowsSource = in.TargetSource
+		p.TargetRowsAssumed = in.TargetSource == TargetSourceAssumed
 	}
 	measured := in.Measured
 	if in.TwinRows <= 0 || p.TargetRows <= 0 {
@@ -185,11 +215,20 @@ func scaleWarning(measured string, p ScaleProjection) string {
 		measuredText = fmt.Sprintf("under %.2fs — below what 250ms sampling can resolve", scaleFloorSeconds)
 		projectedText = fmt.Sprintf("at most ~%.0fs", p.ProjectedBlockedSeconds)
 	}
+	target := fmt.Sprintf("your %s-row table", commas(p.TargetRows))
+	tail := "Rehearse against a larger sample before shipping."
+	if p.TargetRowsAssumed {
+		// Nobody told us how big their table is. The projection is still the
+		// useful thing to show — but it is arithmetic on an assumption, and
+		// saying "your table" about a number Brace invented would be a lie.
+		target = fmt.Sprintf("a %s-row table (ASSUMED — nobody told Brace your real size)", commas(p.TargetRows))
+		tail = "Pass target_rows (or set BRACE_TARGET_ROWS) to project onto your actual table instead of this assumption."
+	}
 	return fmt.Sprintf(
-		"SAFE on this %s-row twin (%s), but your %s-row table is %s larger: expect %s of blocked writes. "+
-			"The model is %s. Rehearse against a larger sample before shipping.",
-		commas(p.TwinRows), measuredText, commas(p.TargetRows), ratioText(p.TwinRows, p.TargetRows),
-		projectedText, p.Model)
+		"SAFE on this %s-row twin (%s), but %s is %s larger: expect %s of blocked writes. "+
+			"The model is %s. %s",
+		commas(p.TwinRows), measuredText, target, ratioText(p.TwinRows, p.TargetRows),
+		projectedText, p.Model, tail)
 }
 
 // ratioText renders the size multiple the way a person would say it.
