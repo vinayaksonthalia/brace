@@ -584,6 +584,31 @@ brace-check -target-rows 500000000 -f migration.sql</pre>
 <span class="c">#     { index:1, verdict:"UNSAFE", blocked_seconds:27.8, casualties:{…} } ]</span>
 <span class="c"># each step measured in its own window — you see WHICH step is the killer.</span></pre>
       </div>
+      <figure class="diagram" aria-labelledby="dg-seq-t">
+        <div class="dg-frame">
+        <svg viewBox="0 0 680 192" role="img" aria-labelledby="dg-seq-t dg-seq-d">
+          <title id="dg-seq-t">A sequence: steps in order on one twin, each measured in its own window</title>
+          <desc id="dg-seq-d">Two statements run in order on the same twin under continuous load. Step one adds a column and is safe; step two indexes that new column and freezes writes. The overall verdict is the worst of the two.</desc>
+          <rect class="dg-node dg-node--accent" x="8" y="14" width="664" height="26" rx="6"/>
+          <text class="dg-t" x="340" y="31" text-anchor="middle" font-size="11">one twin · load runs the whole time</text>
+          <rect class="dg-node" x="40" y="70" width="158" height="52" rx="8"/>
+          <text class="dg-t" x="119" y="92" text-anchor="middle" font-size="11">1 · ADD COLUMN</text>
+          <text class="dg-t--mono" x="119" y="108" text-anchor="middle" font-size="9" style="fill:var(--green)">SAFE · 0.0s</text>
+          <line class="dg-flow" x1="198" y1="96" x2="236" y2="96"/>
+          <polygon class="dg-arrow" points="236,96 228,92 228,100"/>
+          <text class="dg-t--mono" x="217" y="87" text-anchor="middle" font-size="8">then</text>
+          <rect class="dg-node dg-node--crash" x="240" y="70" width="300" height="52" rx="8"/>
+          <text class="dg-t" x="390" y="92" text-anchor="middle" font-size="11">2 · CREATE INDEX on the new column</text>
+          <text class="dg-t--red" x="390" y="108" text-anchor="middle" font-size="9">UNSAFE · 24.6s frozen · 384 killed</text>
+          <line class="dg-flow dg-flow--red" x1="390" y1="122" x2="390" y2="150"/>
+          <polygon class="dg-arrow dg-arrow--red" points="390,150 386,142 394,142"/>
+          <rect class="dg-node dg-node--crash" x="272" y="152" width="236" height="30" rx="8"/>
+          <text class="dg-t--red" x="390" y="171" text-anchor="middle" font-size="11">overall = worst-of = UNSAFE</text>
+        </svg>
+        </div>
+        <figcaption>Step 2 indexes a column step 1 just added — on the <em>same</em> twin, so it doesn't ERROR the way two separate runs would. Each step is measured on its own; the overall verdict is the worst step.</figcaption>
+      </figure>
+
       <p>A step that is SAFE only because nothing was holding the table — a metadata-only <code>ACCESS EXCLUSIVE</code> shape that got its lock instantly — still carries <code>qualifier: "acquisition_not_simulated"</code> in its per-statement result, exactly as a single run would. <code>hostile</code> can't combine with <code>statements</code> (a sequence can't hold one contended lock across the whole script); to measure a step's acquisition wait, run that one statement on its own with <code>hostile=true</code>.</p>
 
       <h3>Match your application's real deadline</h3>
@@ -874,6 +899,48 @@ pg_restore -U &lt;superuser&gt; -d brace_template your-dump.dump</pre>
       <p class="eyebrow">The stack · and why</p>
       <h2>Every piece is boring on purpose.</h2>
       <p class="doc-lede">Brace measures the truth about a database under load, so the stack's only job is to stay out of the way of that measurement. Nothing here is chosen to be fashionable — each piece is the one that lets Brace watch a real lock without a layer of abstraction lying about it.</p>
+
+      <figure class="diagram" aria-labelledby="dg-stack-t">
+        <div class="dg-frame">
+        <svg viewBox="0 0 680 210" role="img" aria-labelledby="dg-stack-t dg-stack-d">
+          <title id="dg-stack-t">One engine, three interfaces, its own Postgres</title>
+          <desc id="dg-stack-d">The web lab, the brace-check CLI and a coding agent all reach one Go engine over HTTP — the agent through the mcp service — and the engine owns a PostgreSQL 16 it clones disposable twins from.</desc>
+          <rect class="dg-node" x="8" y="12" width="150" height="40" rx="8"/>
+          <text class="dg-t" x="83" y="36" text-anchor="middle" font-size="12">web lab</text>
+          <rect class="dg-node" x="8" y="84" width="150" height="40" rx="8"/>
+          <text class="dg-t" x="83" y="101" text-anchor="middle" font-size="12">brace-check</text>
+          <text class="dg-t--mono" x="83" y="115" text-anchor="middle" font-size="9">CI / deploy gate</text>
+          <rect class="dg-node" x="8" y="156" width="150" height="40" rx="8"/>
+          <text class="dg-t" x="83" y="180" text-anchor="middle" font-size="12">coding agent</text>
+          <rect class="dg-node" x="196" y="156" width="86" height="40" rx="8"/>
+          <text class="dg-t" x="239" y="174" text-anchor="middle" font-size="11">mcp</text>
+          <text class="dg-t--mono" x="239" y="187" text-anchor="middle" font-size="8.5">python</text>
+          <line class="dg-flow" x1="158" y1="32" x2="356" y2="82"/>
+          <polygon class="dg-arrow" points="356,82 347,80 351,73"/>
+          <line class="dg-flow" x1="158" y1="104" x2="356" y2="104"/>
+          <polygon class="dg-arrow" points="356,104 348,100 348,108"/>
+          <line class="dg-flow" x1="158" y1="176" x2="196" y2="176"/>
+          <polygon class="dg-arrow" points="196,176 188,172 188,180"/>
+          <line class="dg-flow" x1="282" y1="176" x2="356" y2="128"/>
+          <polygon class="dg-arrow" points="356,128 347,130 351,137"/>
+          <text class="dg-t--mono" x="250" y="148" text-anchor="middle" font-size="8.5">private network</text>
+          <rect class="dg-node dg-node--accent" x="360" y="40" width="150" height="128" rx="8"/>
+          <text class="dg-t" x="435" y="86" text-anchor="middle" font-size="13">api · Go engine</text>
+          <text class="dg-t--mono" x="435" y="106" text-anchor="middle" font-size="9.5">assess · load</text>
+          <text class="dg-t--mono" x="435" y="120" text-anchor="middle" font-size="9.5">monitor · verdict</text>
+          <line class="dg-flow" x1="510" y1="104" x2="556" y2="104"/>
+          <polygon class="dg-arrow" points="556,104 548,100 548,108"/>
+          <rect class="dg-node" x="560" y="40" width="112" height="128" rx="8"/>
+          <text class="dg-t" x="616" y="60" text-anchor="middle" font-size="12">db · PG16</text>
+          <text class="dg-t--mono" x="616" y="73" text-anchor="middle" font-size="8.5">owned · superuser</text>
+          <rect class="dg-node dg-node--accent" x="572" y="84" width="88" height="30" rx="6"/>
+          <text class="dg-t--mono" x="616" y="103" text-anchor="middle" font-size="9">template</text>
+          <rect class="dg-node" x="572" y="122" width="88" height="30" rx="6"/>
+          <text class="dg-t--mono" x="616" y="141" text-anchor="middle" font-size="8.5">twin ⇒ dropped</text>
+        </svg>
+        </div>
+        <figcaption>One measurement engine, reached three ways — the web lab and CLI hit it directly, an agent through the <code>mcp</code> service — all over the private network. It owns the Postgres it clones twins from.</figcaption>
+      </figure>
 
       <h3>Go for the engine — because one run is a concurrency problem</h3>
       <p>A single rehearsal runs three things at once against one twin: dozens of labelled write workers, a lock monitor sampling <code>pg_locks</code> every 250&nbsp;ms, and the migration itself. That is a goroutine problem — cheap concurrency, precise cancellation, one static binary with no runtime to install. The engine talks to Postgres through <a href="https://github.com/jackc/pgx" target="_blank" rel="noopener noreferrer">pgx</a> rather than the lowest-common-denominator driver, because it needs the real protocol: to read <code>pg_stat_activity</code>, to set <code>lock_timeout</code> per connection, and to run DDL in autocommit — which <code>CREATE INDEX CONCURRENTLY</code> requires.</p>
