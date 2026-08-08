@@ -382,8 +382,13 @@ body{
   100% { stroke-dashoffset:0;   opacity:0; }
 }
 
-/* the rail mark: the loop only, kept quiet — no assembly, no bloom */
-.mark--live .m-pulse{ stroke-opacity:.5; animation:m-draw 4.4s linear infinite; }
+/* the rail mark: a live instrument, not a static glyph. A rhythmic heartbeat
+   across the mark, in time with a gentle breathe of the ring, so the logo reads
+   as "the lab is running" — the same idea as the live scope, at 28px. Both
+   animate FROM an offset, so reduced-motion still freezes it fully assembled. */
+.mark--live .m-pulse{ stroke-opacity:.8; animation:m-draw 2.4s linear infinite; }
+.mark--live .mark__ring{ animation:mark-breathe 2.4s ease-in-out infinite; }
+@keyframes mark-breathe{ 0%,100%{ opacity:.5; } 50%{ opacity:1; } }
 
 /* ── the hero lockup: calibration assembly, once, then the loop ──
    Quadrant pairs counter-rotate into register, the ring draws itself
