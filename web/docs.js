@@ -74,7 +74,7 @@
 
   function markToc() {
     if (!tocLinks.length) return;
-    var line = 150, best = 0, bestTop = -Infinity;
+    var line = 185, best = 0, bestTop = -Infinity;
     for (var i = 0; i < tocLinks.length; i++) {
       var top = tocLinks[i].target.getBoundingClientRect().top;
       if (top - line <= 0 && top > bestTop) { bestTop = top; best = i; }
@@ -89,7 +89,7 @@
   var currentSec = -1;
   function spy() {
     if (!secs.length) return;
-    var line = 140, best = 0, bestTop = -Infinity;
+    var line = 185, best = 0, bestTop = -Infinity;
     for (var i = 0; i < secs.length; i++) {
       var top = secs[i].getBoundingClientRect().top;
       if (top - line <= 0 && top > bestTop) { bestTop = top; best = i; }
