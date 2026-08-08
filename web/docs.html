@@ -19,8 +19,8 @@
 if(t!=='light'&&t!=='dark'){t=window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';}
 document.documentElement.setAttribute('data-theme',t);
 document.documentElement.className+=' js';})();</script>
-<link rel="stylesheet" href="style.css">
-<link rel="stylesheet" href="docs.css">
+<link rel="stylesheet" href="style.css?v=6">
+<link rel="stylesheet" href="docs.css?v=6">
 </head>
 <body class="docs">
 
@@ -123,17 +123,17 @@ document.documentElement.className+=' js';})();</script>
           </ul>
         </div>
         <div class="navgroup">
-          <p class="navgroup__label">Honesty</p>
-          <ul>
-            <li><a class="navlink" href="#fixed" data-nav><span class="navlink__ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M10.6 2.6a2.9 2.9 0 0 0-3.8 3.6L2.7 10.3a1.4 1.4 0 0 0 2 2l4.1-4.1a2.9 2.9 0 0 0 3.6-3.8l-1.7 1.7-1.6-.4-.4-1.6z"/></svg></span><span>What we got wrong</span></a></li>
-            <li><a class="navlink" href="#limits" data-nav><span class="navlink__ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2.4 1.6 13.2h12.8z"/><path d="M8 6.5v3.1M8 11.3v.01"/></svg></span><span>Honest limits</span></a></li>
-          </ul>
-        </div>
-        <div class="navgroup">
           <p class="navgroup__label">The stack</p>
           <ul>
             <li><a class="navlink" href="#zerops" data-nav><span class="navlink__ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="2.4" y="2.8" width="11.2" height="4.2" rx="1.2"/><rect x="2.4" y="9" width="11.2" height="4.2" rx="1.2"/><path d="M5 4.9h.01M5 11.1h.01"/></svg></span><span>Why Zerops</span></a></li>
             <li><a class="navlink" href="#stack" data-nav><span class="navlink__ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2 2 5l6 3 6-3z"/><path d="M2 8l6 3 6-3M2 11l6 3 6-3"/></svg></span><span>The stack</span></a></li>
+          </ul>
+        </div>
+        <div class="navgroup">
+          <p class="navgroup__label">Honesty</p>
+          <ul>
+            <li><a class="navlink" href="#fixed" data-nav><span class="navlink__ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M10.6 2.6a2.9 2.9 0 0 0-3.8 3.6L2.7 10.3a1.4 1.4 0 0 0 2 2l4.1-4.1a2.9 2.9 0 0 0 3.6-3.8l-1.7 1.7-1.6-.4-.4-1.6z"/></svg></span><span>What we got wrong</span></a></li>
+            <li><a class="navlink" href="#limits" data-nav><span class="navlink__ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2.4 1.6 13.2h12.8z"/><path d="M8 6.5v3.1M8 11.3v.01"/></svg></span><span>Honest limits</span></a></li>
           </ul>
         </div>
         <p class="nav-empty">No section matches that.</p>
@@ -448,6 +448,36 @@ zcli push --serviceId &lt;mcp-id&gt; --setup mcp <span class="c"># the hosted MC
       <p><strong class="lead-in">The problem it solves:</strong> some dangerous statements are dangerous only under contention. On an idle twin, a statement like <code>ALTER TABLE … ADD COLUMN</code> (with no default) acquires its <code>ACCESS EXCLUSIVE</code> lock instantly, does its work in milliseconds, and reports zero casualties. In production, that same statement has to <em>wait</em> for the lock — behind whatever transaction is already touching the table — and while it waits, every other write waits behind it.</p>
 
       <p>Hostile mode holds a transaction open on the twin so the migration's lock <strong>acquisition</strong> has to queue, exactly as it would in production. The freeze that would otherwise be assumed is now measured:</p>
+
+      <figure class="diagram" aria-labelledby="dg-hostile-t">
+        <div class="dg-frame">
+        <svg viewBox="0 0 680 190" role="img" aria-labelledby="dg-hostile-t dg-hostile-d">
+          <title id="dg-hostile-t">Hostile mode: the freeze is the wait to acquire the lock</title>
+          <desc id="dg-hostile-d">A contender transaction holds the lock; the migration queues behind it, and every write queues behind the migration. PostgreSQL grants locks in arrival order, so until the contender's transaction ends, everything behind it is frozen.</desc>
+          <text class="dg-t--mono" x="16" y="24" font-size="10" style="fill:var(--amber)">lock queue · granted in arrival order →</text>
+          <!-- freeze bracket over the two waiting boxes -->
+          <path class="dg-flow dg-flow--red" d="M246 52 V46 H664 V52" fill="none"/>
+          <text class="dg-t--red" x="455" y="40" text-anchor="middle" font-size="10">frozen — every write waits for the lock</text>
+          <!-- contender holds -->
+          <rect class="dg-node dg-node--accent" x="16" y="66" width="196" height="58" rx="8"/>
+          <text class="dg-t" x="114" y="91" text-anchor="middle" font-size="12.5">contender · open txn</text>
+          <text class="dg-t--mono" x="114" y="109" text-anchor="middle" font-size="10" style="fill:var(--amber)">HOLDS the lock</text>
+          <line class="dg-flow" x1="212" y1="95" x2="240" y2="95"/>
+          <polygon class="dg-arrow" points="246,95 238,91 238,99"/>
+          <!-- migration waits -->
+          <rect class="dg-node" x="246" y="66" width="180" height="58" rx="8"/>
+          <text class="dg-t" x="336" y="91" text-anchor="middle" font-size="12.5">your migration</text>
+          <text class="dg-t--mono" x="336" y="109" text-anchor="middle" font-size="10">fast DDL · WAITS</text>
+          <line class="dg-flow dg-flow--red" x1="426" y1="95" x2="454" y2="95"/>
+          <polygon class="dg-arrow dg-arrow--red" points="460,95 452,91 452,99"/>
+          <!-- writes wait & die -->
+          <rect class="dg-node dg-node--crash" x="460" y="66" width="204" height="58" rx="8"/>
+          <text class="dg-t" x="562" y="91" text-anchor="middle" font-size="12.5">every write behind it</text>
+          <text class="dg-t--red" x="562" y="109" text-anchor="middle" font-size="10">queues, then times out</text>
+        </svg>
+        </div>
+        <figcaption>Off an idle twin a fast DDL grabs its lock instantly and looks safe. Hostile mode holds a real transaction so the DDL must <em>queue</em> — and every write queues behind it. The freeze is the wait to <em>acquire</em> the lock, not the work.</figcaption>
+      </figure>
 
       <div class="doc-tablewrap">
         <table class="doc-table">
@@ -839,61 +869,6 @@ pg_restore -U &lt;superuser&gt; -d brace_template your-dump.dump</pre>
     </section>
 
     <!-- ══ 11 · HONEST LIMITS ═══════════════════════════════════ -->
-    <!-- ══ WHAT WE GOT WRONG — AND FIXED ═══════════════════════ -->
-    <section class="doc-sec reveal" id="fixed" data-title="What we got wrong">
-      <p class="eyebrow">Honesty · the fixes</p>
-      <h2>What we got wrong — and fixed.</h2>
-      <p class="doc-lede">A tool that tells you a migration is safe has to be right, so the ways Brace was once <em>wrong</em> are worth naming. Each of these was a real bug caught before submission; each is fixed; each changed how the engine works today. They are here because a measurement tool earns trust by showing its scars, not by hiding them.</p>
-
-      <h3>The load ran as superuser</h3>
-      <p><strong class="lead-in">What broke:</strong> the write traffic once ran as the database superuser. A migration is caller-supplied SQL, and a <code>CHECK</code> constraint or column <code>DEFAULT</code> is evaluated as the session that <em>writes</em> the row — so a smuggled expression could have called <code>pg_read_file()</code> as superuser. <strong class="lead-in">The fix:</strong> two least-privilege roles — <code>brace_migrator</code> and <code>brace_traffic</code>, both <code>NOSUPERUSER NOCREATEDB</code> — so the <em>role</em>, not a regex, is the boundary. The allow-list is now only UX and blast-radius hygiene; the privilege floor is what actually contains hostile SQL.</p>
-
-      <h3>A migration could read SAFE when it wasn't</h3>
-      <p><strong class="lead-in">What broke:</strong> several shapes could earn a false green light — a <code>DEFAULT</code> using a volatile function that silently rewrites the table, a statement against a table the lab doesn't have (fast-pathed to SAFE), an O(rows) change that finished fast on a small twin. <strong class="lead-in">The fix:</strong> the monitor's <em>observed lock mode</em> is now the arbiter of whether a freeze is even possible; a nonexistent relation is <code>REJECTED</code>, never blessed; and the <a href="#scale">scale projection</a> can escalate a twin-SAFE result to <code>UNSAFE</code> at your real row count. A <code>SAFE</code> now has to survive all three.</p>
-
-      <h3>The dangerous half of a fast statement was invisible</h3>
-      <p><strong class="lead-in">What broke:</strong> a metadata-only <code>ALTER TABLE … ADD COLUMN</code> takes <code>ACCESS EXCLUSIVE</code> but gets it instantly on an idle twin — so it measured SAFE, hiding that in production it waits behind your longest open transaction while every query queues behind it. <strong class="lead-in">The fix:</strong> that verdict now carries the <code>acquisition_not_simulated</code> qualifier, and <a href="#hostile">hostile mode</a> holds a real transaction so the acquisition wait is measured, not assumed.</p>
-
-      <h3>The projection once invented a freeze</h3>
-      <p><strong class="lead-in">What broke:</strong> an early scale model projected a phantom freeze onto shapes that don't block writes at all, turning a genuinely safe change red. <strong class="lead-in">The fix:</strong> the projection only ever escalates a measured <code>SAFE</code> to <code>UNSAFE</code> — it never manufactures a number for a non-write-blocking shape, and an <code>ERRORED</code> or <code>INCONCLUSIVE</code> run emits no projection at all. It is labelled an assumption everywhere it appears.</p>
-
-      <h3>The platform proxy silently downgraded the MCP</h3>
-      <p><strong class="lead-in">What broke:</strong> the hosted endpoint's <code>POST /mcp/</code> was rewritten to a <code>307 → GET /mcp</code> by the platform proxy, which broke the streamable-HTTP handshake — the remote MCP looked dead through no fault of its own. <strong class="lead-in">The fix:</strong> an ASGI path-normalising wrapper serves both <code>/mcp</code> and <code>/mcp/</code> directly, so an agent connects whether or not its client sends the trailing slash.</p>
-
-      <div class="callout">
-        <span class="callout__mark">why this page exists</span>
-        <p>Every fix above made the engine say <em>less</em> — fewer confident greens, more honest qualifiers. A crash-test tool is only worth running if it would rather say "I didn't test that" than tell you a comfortable lie.</p>
-      </div>
-    </section>
-
-    <section class="doc-sec reveal" id="limits" data-title="Honest limits">
-      <p class="eyebrow">Honest limits</p>
-      <h2>Where the rehearsal stops matching reality.</h2>
-      <p class="doc-lede">Brace is a rehearsal, not a guarantee. The trust mechanic is naming exactly where it stops being true.</p>
-
-      <h3>Postgres only — on purpose</h3>
-      <p>Brace commits to one database's truth. Its entire mechanism is Postgres-specific: the lock ladder (<code>SHARE</code> / <code>ACCESS EXCLUSIVE</code> / <code>SHARE UPDATE EXCLUSIVE</code>), <code>lock_timeout</code> and the <code>55P03</code> error, and reading contention straight out of <code>pg_locks</code>. Other engines lock differently and would need a different engine, not a config flag. Doing one database exactly right beats doing several approximately.</p>
-
-      <h3>The twin is not your whole production system</h3>
-      <p>A twin is a single Postgres database under a synthetic write mix. It does not model read replicas and replication lag, autovacuum pressure, or a cold cache — all of which shape how a migration actually behaves in production. It proves the <em>mechanism</em> (a blocking lock kills waiting writers); it does not reproduce your specific traffic shape, pooling, or retry logic.</p>
-
-      <h3>The projection is a linear model</h3>
-      <p>Scale projection multiplies a measured freeze by a row-count ratio. It has not been validated across arbitrary index types, fill factors, or hardware, and it is labelled an assumption wherever it appears — never a second measurement.</p>
-
-      <h3>Sequences run; rollout coordination doesn't</h3>
-      <p>Brace measures a single statement <em>or</em> an ordered multi-statement <a href="#what">sequence</a> on one twin (up to 10 steps), each step measured in its own window. What stays out of scope is the application-level coordination <em>around</em> a migration — dual writes, batched backfills, feature-flag cutover — and long transactional DDL blocks. Brace tells you what each DDL step does to live writes; it does not orchestrate the rollout around it.</p>
-
-      <h3>The public lab is synthetic</h3>
-      <p>Row values, timestamps and label statements in the stock seed are generated, not sampled from a real dataset, so planner behaviour can differ from a production table with real data skew even at the same row count. If that is what you're rehearsing, <a href="#byod">bring your own dump</a>.</p>
-
-      <h3>Two more honest edges</h3>
-      <ul>
-        <li><code>CREATE INDEX CONCURRENTLY</code> is reported <span class="pill pill--green">safe</span> for write-freeze purposes because it doesn't take the blocking lock — measured, not assumed. What Brace does <em>not</em> simulate is a <code>CONCURRENTLY</code> build failing partway and leaving an <code>INVALID</code> index that needs a manual retry.</li>
-        <li>The measured numbers on this page reflect one run on one hardware profile. Absolute seconds will differ elsewhere; the <em>relative</em> ordering is the part expected to generalize.</li>
-      </ul>
-    </section>
-
-    <!-- ══ 12 · WHY ZEROPS ══════════════════════════════════════ -->
     <section class="doc-sec reveal" id="zerops" data-title="Why Zerops">
       <p class="eyebrow">Architecture · Why Zerops</p>
       <h2>What Brace needs from its infrastructure — and how Zerops provides it.</h2>
@@ -1006,6 +981,61 @@ pg_restore -U &lt;superuser&gt; -d brace_template your-dump.dump</pre>
       </div>
     </section>
 
+    <!-- ══ 12 · WHY ZEROPS ══════════════════════════════════════ -->
+    <!-- ══ WHAT WE GOT WRONG — AND FIXED ═══════════════════════ -->
+    <section class="doc-sec reveal" id="fixed" data-title="What we got wrong">
+      <p class="eyebrow">Honesty · the fixes</p>
+      <h2>What we got wrong — and fixed.</h2>
+      <p class="doc-lede">A tool that tells you a migration is safe has to be right, so the ways Brace was once <em>wrong</em> are worth naming. Each of these was a real bug caught before submission; each is fixed; each changed how the engine works today. They are here because a measurement tool earns trust by showing its scars, not by hiding them.</p>
+
+      <h3>The load ran as superuser</h3>
+      <p><strong class="lead-in">What broke:</strong> the write traffic once ran as the database superuser. A migration is caller-supplied SQL, and a <code>CHECK</code> constraint or column <code>DEFAULT</code> is evaluated as the session that <em>writes</em> the row — so a smuggled expression could have called <code>pg_read_file()</code> as superuser. <strong class="lead-in">The fix:</strong> two least-privilege roles — <code>brace_migrator</code> and <code>brace_traffic</code>, both <code>NOSUPERUSER NOCREATEDB</code> — so the <em>role</em>, not a regex, is the boundary. The allow-list is now only UX and blast-radius hygiene; the privilege floor is what actually contains hostile SQL.</p>
+
+      <h3>A migration could read SAFE when it wasn't</h3>
+      <p><strong class="lead-in">What broke:</strong> several shapes could earn a false green light — a <code>DEFAULT</code> using a volatile function that silently rewrites the table, a statement against a table the lab doesn't have (fast-pathed to SAFE), an O(rows) change that finished fast on a small twin. <strong class="lead-in">The fix:</strong> the monitor's <em>observed lock mode</em> is now the arbiter of whether a freeze is even possible; a nonexistent relation is <code>REJECTED</code>, never blessed; and the <a href="#scale">scale projection</a> can escalate a twin-SAFE result to <code>UNSAFE</code> at your real row count. A <code>SAFE</code> now has to survive all three.</p>
+
+      <h3>The dangerous half of a fast statement was invisible</h3>
+      <p><strong class="lead-in">What broke:</strong> a metadata-only <code>ALTER TABLE … ADD COLUMN</code> takes <code>ACCESS EXCLUSIVE</code> but gets it instantly on an idle twin — so it measured SAFE, hiding that in production it waits behind your longest open transaction while every query queues behind it. <strong class="lead-in">The fix:</strong> that verdict now carries the <code>acquisition_not_simulated</code> qualifier, and <a href="#hostile">hostile mode</a> holds a real transaction so the acquisition wait is measured, not assumed.</p>
+
+      <h3>The projection once invented a freeze</h3>
+      <p><strong class="lead-in">What broke:</strong> an early scale model projected a phantom freeze onto shapes that don't block writes at all, turning a genuinely safe change red. <strong class="lead-in">The fix:</strong> the projection only ever escalates a measured <code>SAFE</code> to <code>UNSAFE</code> — it never manufactures a number for a non-write-blocking shape, and an <code>ERRORED</code> or <code>INCONCLUSIVE</code> run emits no projection at all. It is labelled an assumption everywhere it appears.</p>
+
+      <h3>The platform proxy silently downgraded the MCP</h3>
+      <p><strong class="lead-in">What broke:</strong> the hosted endpoint's <code>POST /mcp/</code> was rewritten to a <code>307 → GET /mcp</code> by the platform proxy, which broke the streamable-HTTP handshake — the remote MCP looked dead through no fault of its own. <strong class="lead-in">The fix:</strong> an ASGI path-normalising wrapper serves both <code>/mcp</code> and <code>/mcp/</code> directly, so an agent connects whether or not its client sends the trailing slash.</p>
+
+      <div class="callout">
+        <span class="callout__mark">why this page exists</span>
+        <p>Every fix above made the engine say <em>less</em> — fewer confident greens, more honest qualifiers. A crash-test tool is only worth running if it would rather say "I didn't test that" than tell you a comfortable lie.</p>
+      </div>
+    </section>
+
+    <section class="doc-sec reveal" id="limits" data-title="Honest limits">
+      <p class="eyebrow">Honest limits</p>
+      <h2>Where the rehearsal stops matching reality.</h2>
+      <p class="doc-lede">Brace is a rehearsal, not a guarantee. The trust mechanic is naming exactly where it stops being true.</p>
+
+      <h3>Postgres only — on purpose</h3>
+      <p>Brace commits to one database's truth. Its entire mechanism is Postgres-specific: the lock ladder (<code>SHARE</code> / <code>ACCESS EXCLUSIVE</code> / <code>SHARE UPDATE EXCLUSIVE</code>), <code>lock_timeout</code> and the <code>55P03</code> error, and reading contention straight out of <code>pg_locks</code>. Other engines lock differently and would need a different engine, not a config flag. Doing one database exactly right beats doing several approximately.</p>
+
+      <h3>The twin is not your whole production system</h3>
+      <p>A twin is a single Postgres database under a synthetic write mix. It does not model read replicas and replication lag, autovacuum pressure, or a cold cache — all of which shape how a migration actually behaves in production. It proves the <em>mechanism</em> (a blocking lock kills waiting writers); it does not reproduce your specific traffic shape, pooling, or retry logic.</p>
+
+      <h3>The projection is a linear model</h3>
+      <p>Scale projection multiplies a measured freeze by a row-count ratio. It has not been validated across arbitrary index types, fill factors, or hardware, and it is labelled an assumption wherever it appears — never a second measurement.</p>
+
+      <h3>Sequences run; rollout coordination doesn't</h3>
+      <p>Brace measures a single statement <em>or</em> an ordered multi-statement <a href="#what">sequence</a> on one twin (up to 10 steps), each step measured in its own window. What stays out of scope is the application-level coordination <em>around</em> a migration — dual writes, batched backfills, feature-flag cutover — and long transactional DDL blocks. Brace tells you what each DDL step does to live writes; it does not orchestrate the rollout around it.</p>
+
+      <h3>The public lab is synthetic</h3>
+      <p>Row values, timestamps and label statements in the stock seed are generated, not sampled from a real dataset, so planner behaviour can differ from a production table with real data skew even at the same row count. If that is what you're rehearsing, <a href="#byod">bring your own dump</a>.</p>
+
+      <h3>Two more honest edges</h3>
+      <ul>
+        <li><code>CREATE INDEX CONCURRENTLY</code> is reported <span class="pill pill--green">safe</span> for write-freeze purposes because it doesn't take the blocking lock — measured, not assumed. What Brace does <em>not</em> simulate is a <code>CONCURRENTLY</code> build failing partway and leaving an <code>INVALID</code> index that needs a manual retry.</li>
+        <li>The measured numbers on this page reflect one run on one hardware profile. Absolute seconds will differ elsewhere; the <em>relative</em> ordering is the part expected to generalize.</li>
+      </ul>
+    </section>
+
     <!-- close -->
     <section class="docclose reveal">
       <h2>Bring your own migration.</h2>
@@ -1031,7 +1061,7 @@ pg_restore -U &lt;superuser&gt; -d brace_template your-dump.dump</pre>
   <span>Every crash happens on a throwaway twin. Nothing real is ever at risk.</span>
 </footer>
 
-<script src="theme.js"></script>
-<script src="docs.js"></script>
+<script src="theme.js?v=6"></script>
+<script src="docs.js?v=6"></script>
 </body>
 </html>
