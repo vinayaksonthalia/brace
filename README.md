@@ -20,6 +20,8 @@
   <a href="https://web-2a61.prg1.zerops.app/lab.html"><b>Crash a migration right now →</b></a>
   &nbsp;·&nbsp;
   <a href="#quickstart">Deploy your own on Zerops</a>
+  &nbsp;·&nbsp;
+  <a href="https://medium.com/@vinayaksonthalia/your-migration-passed-staging-here-are-the-240-writes-it-would-have-killed-in-production-770849197116">Read the story →</a>
 </p>
 
 <p align="center">
