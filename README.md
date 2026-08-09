@@ -217,6 +217,20 @@ One honesty note worth stating up front: the stock traffic's `checkout` / `login
 
 Bringing your own production dump instead of the synthetic 10M-row demo table: **[docs/BYOD.md](docs/BYOD.md)**.
 
+## Roadmap — what's next for Brace
+
+Brace today rehearses **lock physics** honestly. These are the designed next steps, in rough priority — each extends the tool toward "rehearses *your* database, not just a lock shape," and every one has to preserve the invariant that it never returns `SAFE` without a measurement or a labeled caveat:
+
+- **Multi-table `schema_ddl`** — rehearse a full setup script (foreign keys, partitions, pre-existing indexes/constraints), so the scariest real migrations — an `ADD FOREIGN KEY` that locks the *referenced* table — can be crash-tested, not just single-table ones.
+- **Statistical data twinning** — a one-liner you run against your own database that exports only `pg_stats`/`pg_class` statistics (null fractions, distinct counts, average widths) as a JSON profile — **zero rows leave your network** — so the synthetic twin matches your real data's shape. A production-faithful twin without your data ever leaving your building.
+- **Parameterized load & contention** — configurable hostile `hold_seconds` / `cycles` and traffic mix (write-heavy, read-heavy, long analytics queries), so you can ask "what if my longest transaction is 30 seconds?"
+- **Settings simulation** — set `lock_timeout` / `statement_timeout` / `maintenance_work_mem` for the rehearsal, and surface the standard `lock_timeout` + retry-loop mitigation for every acquisition-risk warning.
+- **Schema discovery + dry-run mode** — `lab_status()` returns the lab's tables and columns, and a fast classify-only path returns the predicted lock and shape without spending a full twin run (clearly labeled a prediction, never a `SAFE`).
+- **Team / CI story** — a larger warm-twin pool with queue-position feedback, run-id result correlation, an exit-code gate mode, and a machine-readable result contract for agent integrations.
+- **Postgres version matrix** — report the twin's version and rehearse against 11 / 12 / 13+, where `ADD COLUMN`, `SET NOT NULL` and `CONCURRENTLY` behave meaningfully differently.
+
+Full known-limits map (what's out of scope today and why) lives in **[docs/LIMITATIONS.md](docs/LIMITATIONS.md)**.
+
 ## Project map
 
 ```
