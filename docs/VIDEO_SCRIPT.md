@@ -79,10 +79,10 @@
 
 > **"And this whole thing is a Model Context Protocol server, hosted on Zerops. So any coding agent — Claude Code, Cursor — connects by URL and gates its own migrations."** `[the agent responds UNSAFE]` **"The agent that wrote the migration just asked 'will this hurt?' — and refused to ship it."**
 
-### 2:22–2:36 · Why Zerops — one breath
-`[CUE: the four-service topology / Zerops project — a twin cloned from a template over the private network, then dropped.]`
+### 2:22–2:40 · Why Zerops — show the dashboard
+`[CUE: cut to your Zerops project dashboard — the services list (web · api · mcp · db · zcp) and the topology. Let them see it's a real, running project.]`
 
-> **"Every twin is a real Postgres, cloned in under a second on Zerops and thrown away after. Four services, one import file — anyone can run their own private copy."**
+> **"And this only works because of Zerops. Brace's whole trick is cloning a real Postgres on every run and throwing it away — and almost no managed database lets you do that. Zerops gives me a Postgres I actually own."** `[gesture at the services]` **"Four services on a private network — the Go engine, the static dashboard, the Python MCP endpoint, and the database on its own dedicated cores — stood up from one import file. The database never touches the public internet; the whole thing runs for pennies a day."**
 
 ### 2:36–end · Close on the reframe
 `[CUE: back to the calm, green, healthy lab. Brace wordmark fades in.]`
@@ -108,3 +108,15 @@
 ## Optional B-roll (only if you have time; never the climax)
 - The scale projection escalating a twin-SAFE to UNSAFE at 500M rows (labeled a projection).
 - The docs' "what we got wrong — and fixed" / honest-limits section (shows a judge you know exactly where the tool stops).
+
+## How I used Zerops — talking-points bank (all TRUE; pull what you need)
+Say these in your own words over the dashboard/topology. Every one is accurate:
+
+- **A Postgres I own, not a managed slice.** Brace clones a database on *every run* with `CREATE DATABASE … TEMPLATE` and drops it with `DROP DATABASE … WITH (FORCE)`. That needs superuser + native template cloning + direct `pg_locks` reads — which managed Postgres forbids. Zerops hands you a real PostgreSQL 16 you own. **This is the one thing that makes the twin mechanism possible.**
+- **Four services from one `import.yml`, on a private network.** `web` (static dashboard) · `api` (Go engine) · `mcp` (Python MCP endpoint) · `db` (PostgreSQL 16). They talk over Zerops' private network — the `mcp` service reaches the engine at `http://api:8080`, and the database's superuser DSN never leaves the project. **The private network is the security model**, not just convenience.
+- **Dedicated vCPU on the database.** The one place I deliberately spend: 2–3 dedicated cores on `db`, so `CREATE INDEX CONCURRENTLY`'s two heap scans don't starve the write load — that's what keeps the "safe" run *flat* under the same traffic that craters the naive one. The whole naive-vs-safe contrast depends on it.
+- **`zcli push --serviceId … --setup <name>` per service** made the fix → deploy → verify loop tight enough to iterate all weekend. One trap I hit and can mention: the engine and the MCP are *separate* services, so an engine fix isn't live for agents until both `api` and `mcp` redeploy.
+- **The remote MCP is hosted on Zerops** with subdomain access — any coding agent connects by URL (`claude mcp add --transport http brace https://…/mcp`), nothing cloned or installed. That's the "infrastructure for coding agents" story, made real.
+- **Cheap, disposable, real infra.** The project runs for a couple of dollars a day (the dashboard shows ~$0.58 / 24h at times) — real Postgres you can throw away thousands of times, which is exactly what a crash-test lab needs.
+- **(Optional to mention)** a `zcp` (Zerops Control Plane) service is in the project for control-plane/CLI automation — don't overclaim it if it's idle; the four above are the load-bearing ones.
+- **Not lock-in:** it's standard Go + Python + PostgreSQL 16 with no vendor APIs, so it runs anywhere those do. Zerops is where it's *easy*, not where it's *trapped* — one YAML anyone can `import`.
