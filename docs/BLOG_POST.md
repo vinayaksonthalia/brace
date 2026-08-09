@@ -6,6 +6,9 @@ The tool is **Brace** — a crash-test lab for Postgres migrations. You paste a 
 
 That part took a weekend. The part that took the rest of the time was making sure it would rather say **"I don't know"** than tell you something was safe when it wasn't. Because a migration tester that's wrong once is worse than no tool at all — it's a tool that gets you paged at 2am *with your guard down.* This post is about the bugs that taught me that, and what "never lie" actually costs.
 
+![A naive CREATE INDEX crashing a live twin — write throughput craters to zero, the freeze timer runs, the casualty count climbs](./img/crash.gif)
+*A plain `CREATE INDEX`, live: writes crater to zero on a throwaway twin while the casualty count climbs.*
+
 ## The thing lock theory can't do
 
 Everyone who's shipped a schema migration knows the theory: a plain `CREATE INDEX` takes a lock that blocks writes; add `CONCURRENTLY` and it doesn't. It's in a dozen blog posts. And it still takes people down, because *knowing* "this takes a ShareLock" is not the same as *feeling* that this freezes checkout for 28 seconds and kills 432 orders.
@@ -13,6 +16,9 @@ Everyone who's shipped a schema migration knows the theory: a plain `CREATE INDE
 So Brace doesn't read your SQL and pattern-match like a linter. It runs it. On a real, throwaway Postgres twin, cloned from a seeded 10M-row template with `CREATE DATABASE … TEMPLATE` and dropped with `DROP DATABASE … WITH (FORCE)` after. A load generator hammers the twin with labeled writes — `checkout`, `login`, `add_to_cart` — while a monitor samples `pg_locks` every 250ms. When a write waits past its `lock_timeout` and dies with SQLSTATE `55P03`, that's a casualty. Counted, not modeled.
 
 The demo is honestly kind of beautiful: same index, `CREATE INDEX` vs `CREATE INDEX CONCURRENTLY`, identical end state — one is a 28-second outage, the other is invisible. But the demo isn't the hard part.
+
+![Brace crash report: 28.0s write freeze, 432 writes killed broken out by label, measured two independent ways, with the lock explained in plain English](./img/report-unsafe.png)
+*The report card from that run — the freeze measured two independent ways (write-rate collapse and `pg_locks`), casualties by label, and the lock explained in plain English.*
 
 ## Every way it tried to lie to me
 
@@ -33,6 +39,9 @@ The invariant that fell out of all this: **Brace never returns SAFE without a me
 ## The Zerops-specific gotcha
 
 Brace needs a Postgres it *owns* — superuser, arbitrary `CREATE DATABASE`, `TEMPLATE` cloning, direct `pg_locks` reads. Almost every managed Postgres forbids all four. [Zerops](https://zerops.io) hands you a real one, which is the one thing that makes the twin mechanism possible. Four services from a single `import.yml` — Go engine, static dashboard, Python MCP endpoint, and the database on dedicated vCPU — talking over a private network, so the superuser DSN never leaves the project.
+
+![The Brace project on Zerops — web, api, mcp and a dedicated-vCPU PostgreSQL 16, on a private network, from one import file](./img/zerops-project.png)
+*Screenshot: your Zerops project dashboard — the four services and the topology.*
 
 One thing that ate an hour: I exposed Brace as a remote **MCP** server so any coding agent can crash-test a migration by URL. It kept returning 400. The platform proxy was turning `POST /mcp/` into a `307 → GET /mcp`, which silently downgrades the request and breaks the streamable-HTTP handshake. The fix was an ASGI path-normalizing wrapper that serves both `/mcp` and `/mcp/` directly — the kind of thing you only find by reading the actual network trace, not the docs.
 
