@@ -144,8 +144,15 @@ func TestErroredRunCarriesNothingMeasured(t *testing.T) {
 	if res.ScaleWarning != "" {
 		t.Errorf("an ERRORED run carried a scale warning: %s", res.ScaleWarning)
 	}
-	if res.Explanation != "" && !strings.Contains(res.Explanation, "did not run to a measured result") {
-		t.Errorf("an ERRORED run's explanation is not marked as general behaviour:\n%s", res.Explanation)
+	// New contract: an ERRORED run's explanation states only that nothing was
+	// measured and points at shape_note; the general shape behaviour lives in
+	// shape_note, labelled not-a-measurement, so it can never be quoted as this
+	// run's finding.
+	if res.Explanation != "" && !strings.Contains(res.Explanation, "shape_note") {
+		t.Errorf("an ERRORED run's explanation is not framed as non-measurement (no shape_note pointer):\n%s", res.Explanation)
+	}
+	if res.ShapeNote != "" && !strings.Contains(res.ShapeNote, "NOT a measurement") {
+		t.Errorf("an ERRORED run's shape_note is not labelled not-a-measurement:\n%s", res.ShapeNote)
 	}
 	// -5 target_rows must be ignored (clamped to 0 → no projection), independent of
 	// the ERRORED path.

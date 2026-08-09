@@ -320,13 +320,27 @@ type RunResult struct {
 	// ScaleWarning is non-empty exactly when the twin said SAFE and the
 	// projection says UNSAFE: the false-safe this whole layer exists to catch.
 	ScaleWarning string `json:"scale_warning,omitempty"`
+	// TwinSeededRows / TwinRequestedRows describe a bring-your-own-schema twin whose
+	// requested size exceeded the seed cap (maxSeedRows). TwinSeededRows is what was
+	// physically seeded (the capped sample, == ScaleProjection.TwinRows);
+	// TwinRequestedRows is the size the caller stated. When TwinRequestedRows >
+	// TwinSeededRows the measurement covers only the sample and the note says so
+	// loudly. Both 0 for stock-twin runs and for BYOS runs seeded in full.
+	TwinSeededRows    int64 `json:"twin_seeded_rows,omitempty"`
+	TwinRequestedRows int64 `json:"twin_requested_rows,omitempty"`
 
 	// --- the teach layer ---
 	Classification Classification `json:"classification"`
 	Explanation    string         `json:"explanation"`
-	Suggestion     string         `json:"suggestion,omitempty"`
-	PredictedSafe  bool           `json:"predicted_safe"`
-	Note           string         `json:"note,omitempty"`
+	// ShapeNote is the GENERAL behaviour of this statement's shape, kept separate
+	// from Explanation on a run that measured nothing (ERRORED / INCONCLUSIVE). On
+	// such runs Explanation states only that this run established nothing, and this
+	// field — explicitly labelled not-a-measurement — carries the shape lesson, so
+	// it is never quoted as this run's finding. Empty on a measured run.
+	ShapeNote     string `json:"shape_note,omitempty"`
+	Suggestion    string `json:"suggestion,omitempty"`
+	PredictedSafe bool   `json:"predicted_safe"`
+	Note          string `json:"note,omitempty"`
 	// Qualifier names what this run did NOT establish, when a bare verdict would
 	// overclaim. Today there is one: QualifierAcquisitionNotSimulated, the SAFE
 	// that only means "nothing was holding the table when we asked". Empty when
@@ -819,6 +833,10 @@ type runOptions struct {
 	// bounded sample and sets this to the seeded count; the stock flow leaves it 0
 	// and Config.TwinRows (the template's size) stands.
 	TwinRows int64
+	// SeedCapRequested is the caller's stated bring-your-own-schema row_count when
+	// it exceeded the seed cap, so the twin holds only a capped SAMPLE. 0 for stock
+	// runs and for BYOS runs seeded in full. It drives the loud seed-cap note.
+	SeedCapRequested int64
 }
 
 // WithTargetRows answers "what about MY table?" for one run. Non-positive or
@@ -901,6 +919,13 @@ func (e *Engine) runOn(ctx context.Context, twin *twins.Twin, as *Assessment, mo
 		PredictedSafe:  as.PredictedSafe,
 		Casualties:     Casualties{ByLabel: map[string]int64{}},
 		LockModes:      []string{},
+	}
+	if ro.SeedCapRequested > 0 {
+		// A bring-your-own-schema run whose stated size exceeded the seed cap: the
+		// twin holds only twinRows (the capped sample); everything above it is
+		// projection. appendSeedCapNote turns this into the loud note.
+		res.TwinSeededRows = twinRows
+		res.TwinRequestedRows = ro.SeedCapRequested
 	}
 
 	// The max-duration guard. Everything measured from here on runs under runCtx,
@@ -1462,7 +1487,10 @@ func failureModeFor(res *RunResult, mon monitor.Report) string {
 // Order is precedence: the first true branch wins, so the branches that correct
 // a WRONG reading of the numbers come before the ones that merely add colour.
 func noteFor(res *RunResult, as *Assessment, mon monitor.Report) string {
-	return appendDeadlineNote(baseNote(res, as, mon), res)
+	n := appendDeadlineNote(baseNote(res, as, mon), res)
+	n = appendSeedCapNote(n, res)
+	n = appendLockModeNote(n, res, mon)
+	return n
 }
 
 // explanationFor keeps the static per-class lesson by default, but rewrites its
@@ -1488,11 +1516,12 @@ func explanationFor(res *RunResult, as *Assessment) string {
 	if res.Verdict == VerdictErrored || res.Verdict == VerdictInconclusive {
 		// The statement never produced a measurement — it failed to execute, or the
 		// guard aborted it before it finished. The per-class lesson still describes
-		// the SHAPE, but nothing here was measured, so it must be framed as general
-		// behaviour rather than a finding about this run. Anything measured-sounding
-		// on a run that never ran (a freeze story, a scale projection) is a lie.
-		return "This statement did not run to a measured result, so the following is the general behaviour of this " +
-			"shape, not a measurement of this run. " + base
+		// the SHAPE, but nothing here was measured. Keep the SHAPE text out of
+		// `explanation` entirely — an agent scanning explanation must not be able to
+		// quote it as this run's finding — and move it to the clearly-general
+		// shape_note. explanation states only what this run established: nothing.
+		res.ShapeNote = "General behaviour of this SHAPE — NOT a measurement of this run: " + base
+		return nonMeasuredExplanation(res.Verdict)
 	}
 	claimsSafe := !as.Lesson.BlocksWrites || as.Lesson.TriviallySafe
 	froze := res.Verdict == VerdictUnsafe || res.BlockedSeconds > unsafeThresholdSeconds
@@ -1651,6 +1680,87 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "…"
+}
+
+// nonMeasuredExplanation is the run-specific `explanation` for a result that
+// measured nothing. It says ONLY what this run established (nothing) and points
+// the reader at shape_note for the shape's general behaviour — so the shape text,
+// which reads like a finding, can never be quoted as this run's measurement.
+func nonMeasuredExplanation(verdict string) string {
+	switch verdict {
+	case VerdictInconclusive:
+		return "This run was INCONCLUSIVE: the statement never finished under load (it did not acquire its lock within " +
+			"the budget), so no freeze, casualty or lock figure here is a completed measurement. See shape_note for how " +
+			"this shape behaves in general."
+	case VerdictErrored:
+		return "This run ERRORED: PostgreSQL refused the statement, so it produced no freeze, casualty or lock " +
+			"measurement. See error for why it failed, and shape_note for how this shape behaves in general."
+	case VerdictSkipped:
+		return "This step was SKIPPED: an earlier statement failed and the migration halted before this one ran, so it " +
+			"was never measured. See shape_note for how this shape behaves in general."
+	default:
+		return ""
+	}
+}
+
+// appendSentence joins one more sentence onto a note, tolerating either side
+// being empty. It is the shared spine of every append*Note helper.
+func appendSentence(note, line string) string {
+	if line == "" {
+		return note
+	}
+	if note == "" {
+		return line
+	}
+	return note + " " + line
+}
+
+// appendSeedCapNote surfaces, loudly, that a bring-your-own-schema twin holds only
+// a capped SAMPLE — so a SAFE here is a SAFE on the sample and the rest is
+// projection. It fires only when the caller's stated size actually exceeded what
+// was seeded; a stock twin or a fully-seeded BYOS run is untouched.
+func appendSeedCapNote(note string, res *RunResult) string {
+	if res.TwinRequestedRows <= 0 || res.TwinSeededRows <= 0 || res.TwinRequestedRows <= res.TwinSeededRows {
+		return note
+	}
+	line := fmt.Sprintf("This twin was built with %s rows — bring-your-own-schema seeding is capped at %s for the shared "+
+		"lab, but you stated %s. Everything above %s rows is PROJECTION, not measurement: the freeze was measured on the "+
+		"%s-row sample and scaled to your size, so a SAFE here is a SAFE on the sample. Gate on effective_verdict, which "+
+		"carries that projection.",
+		commas(res.TwinSeededRows), commas(maxSeedRows), commas(res.TwinRequestedRows),
+		commas(res.TwinSeededRows), commas(res.TwinSeededRows))
+	return appendSentence(note, line)
+}
+
+// lockModeNoteLine explains an EMPTY lock_modes on a run that nonetheless shows a
+// lock mattered. Brace samples pg_locks every 250ms and reports only GRANTED,
+// write-blocking locks on pre-existing tables, so a sub-sample metadata change or
+// a window spent WAITING for an ungranted lock leaves lock_modes empty even though
+// a lock drove the freeze. When the monitor captured the mode the migration held-
+// or-awaited, name it; either way, correct the "empty means no lock" misreading.
+// Returns "" when there is no lock evidence, so a genuinely lock-free change (a
+// bare ANALYZE) gets no spurious caveat.
+func lockModeNoteLine(blocked float64, casualties int64, verdict string, mon monitor.Report) string {
+	evidence := blocked > 0 || casualties > 0 || mon.MigrationLockWaited || verdict == VerdictInconclusive
+	if !evidence {
+		return ""
+	}
+	if mon.MigrationLockModeRequested != "" {
+		return fmt.Sprintf("lock_modes is empty, but the monitor saw the migration hold-or-await %s: the 250ms sampler "+
+			"did not catch it GRANTED on a pre-existing table (a sub-sample metadata change, or a window spent WAITING for "+
+			"an ungranted lock). Empty lock_modes here does NOT mean no lock was taken.", mon.MigrationLockModeRequested)
+	}
+	return "lock_modes is empty, but this run shows lock evidence (a freeze, dead writes, or a wait): the 250ms sampler " +
+		"did not catch a granted, write-blocking lock on a pre-existing table during a poll — a sub-sample metadata change, " +
+		"or a window spent WAITING for an ungranted lock. Empty lock_modes does NOT mean no lock was taken."
+}
+
+// appendLockModeNote is lockModeNoteLine applied to a single-statement result.
+func appendLockModeNote(note string, res *RunResult, mon monitor.Report) string {
+	if len(res.LockModes) > 0 {
+		return note
+	}
+	return appendSentence(note, lockModeNoteLine(res.BlockedSeconds, res.Casualties.Total, res.Verdict, mon))
 }
 
 func sleepCtx(ctx context.Context, d time.Duration) bool {

@@ -50,7 +50,7 @@ _RESULT_FIELDS = (
     "effective_verdict", "verdict", "scale_projection",
     "scale_warning", "blocked_seconds", "duration_seconds",
     "casualties", "errored_total", "baseline_writes_per_sec",
-    "lock_modes", "explanation", "suggestion", "error",
+    "lock_modes", "explanation", "shape_note", "suggestion", "error",
     "invalid_indexes",
     # The honesty layer: what this run did NOT establish (qualifier), the
     # one-line caveat (note), and whether hostile contention actually engaged
@@ -168,7 +168,15 @@ def check_migration(
     target_rows: the row count of the table you will actually run this against.
     The twin is a sample, and a freeze scales with table size — pass your real
     number and the projection escalates a SAFE measurement to UNSAFE when it
-    would not be safe at your scale. Leave it 0 to skip projection.
+    would not be safe at your scale. Leaving it 0 does NOT skip the projection:
+    the lab falls back to its deployment-configured BRACE_TARGET_ROWS, or — if
+    the operator set none — a built-in default ASSUMPTION about your table
+    (~100M rows). The projection and whose number it used are always reported in
+    scale_projection.target_rows_source ("request" | "deployment" |
+    "brace_default_assumption"); a projection built on the default assumption is
+    loudly marked in the note so you never read it as a fact about your table.
+    Pass your real target_rows to project onto YOUR table instead of the lab's
+    default.
 
     hostile: run the migration against a deliberately contended table — while it
     runs, the lab holds a transaction open on the target so the migration has to
@@ -182,6 +190,25 @@ def check_migration(
     "acquisition_not_simulated" or "contention_not_engaged" is only half the
     answer — re-run with hostile=true to measure the rest. contention reports
     whether hostile mode actually engaged.
+
+    scale_projection: the modelled cost at your table size, ALWAYS present when a
+    projection was made (see target_rows above). Read target_rows_source to know
+    whose number it used, and note its model is a LINEAR-in-rows floor: real
+    index-build and table-rewrite cost is super-linear, so the projected freeze is
+    a LOWER bound, never an over-estimate. When the target is more than ~20x the
+    twin, scale_projection.qualifier is "modeled_beyond_measurement" — treat the
+    number as an order of magnitude, not a precise figure. For a SEQUENCE, the
+    top-level scale_projection is the worst-of the per-statement projections.
+
+    lock_modes vs shape_note: an EMPTY lock_modes does NOT mean the migration took
+    no lock. Brace samples pg_locks every 250ms and reports only GRANTED,
+    write-blocking locks on pre-existing tables; a sub-250ms metadata change, or a
+    run that spent its window WAITING for its lock (a hostile ADD COLUMN), can
+    freeze writes with lock_modes still empty — the note then names the mode the
+    monitor saw held-or-awaited. And on an ERRORED / INCONCLUSIVE / SKIPPED result,
+    "explanation" states only that this run measured nothing; the general behaviour
+    of the shape is in "shape_note", kept separate precisely so it is never quoted
+    as this run's finding.
 
     RETURN CONTRACT — every value this tool (and get_result) can put in the
     top-level "verdict"/"effective_verdict"/"status" fields, so a strict gate is

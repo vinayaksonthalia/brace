@@ -514,7 +514,7 @@ zcli push --serviceId &lt;mcp-id&gt; --setup mcp <span class="c"># the hosted MC
 
       <div class="callout">
         <span class="callout__mark">assumption</span>
-        <p>The projection is a <strong>linear model</strong>, not a second measurement. It is clearly labelled as an assumption everywhere it appears, because it has not been validated across arbitrary index types, fill factors, or hardware — and it will be wrong in ways a real crash test at your actual scale would not be.</p>
+        <p>The projection is a <strong>linear-in-rows floor</strong>, not a second measurement: <code>projected = measured × target ÷ twin</code>. Real index-build and table-rewrite cost is <strong>super-linear</strong> (≈ O(<em>n</em> log <em>n</em>) or worse), so the projected freeze is a <strong>lower bound</strong> — the true freeze is at least this and usually longer, never shorter. Past ~20× the twin the number is an order of magnitude, not a figure: the projection then carries <code>qualifier: "modeled_beyond_measurement"</code>. It always reports <code>target_rows_source</code> — <code>request</code> (you passed it), <code>deployment</code> (the lab's <code>BRACE_TARGET_ROWS</code>), or <code>brace_default_assumption</code> (nobody said, so Brace assumed a size and says so loudly). It has not been validated across arbitrary index types, fill factors, or hardware, and it will be wrong in ways a real crash test at your actual scale would not be.</p>
       </div>
     </section>
 

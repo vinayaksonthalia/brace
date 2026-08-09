@@ -264,6 +264,12 @@ func (e *Engine) RehearseSchema(ctx context.Context, req SchemaRequest, opts ...
 		}
 	}
 	seedRows := resolveSeedRows(req.RowCount)
+	// When the caller's real table is larger than the seed cap, the twin is only a
+	// capped SAMPLE. Record the requested size so the run note says so loudly: a
+	// SAFE here is a SAFE on seedRows rows, and everything above is projection.
+	if req.RowCount > seedRows {
+		ro.SeedCapRequested = req.RowCount
+	}
 
 	runID, err := newRunID()
 	if err != nil {

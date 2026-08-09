@@ -50,6 +50,16 @@ const (
 	// and passed" would be the false green light hostile mode exists to prevent.
 	QualifierContentionNotEngaged = "contention_not_engaged"
 
+	// QualifierModeledBeyondMeasurement marks a scale PROJECTION whose target/twin
+	// ratio exceeds highExtrapolationRatio (~20x). It is a property of the
+	// projection (it lives on ScaleProjection.Qualifier), not of the run: past that
+	// ratio a single measurement scaled linearly is an order-of-magnitude estimate,
+	// and because real index-build and table-rewrite cost is super-linear the
+	// projected freeze is a LOWER bound. It never softens a verdict — the
+	// EffectiveVerdict escalation still stands; it only says "treat the projected
+	// number as a floor, not a point estimate".
+	QualifierModeledBeyondMeasurement = "modeled_beyond_measurement"
+
 	// FailureModeWritesErrored says the write rate collapsed because the traffic
 	// statements themselves started failing — not because a lock blocked them.
 	// The canonical case is a rename: after ALTER TABLE orders RENAME TO ...,

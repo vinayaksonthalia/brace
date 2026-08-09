@@ -92,6 +92,16 @@ type Report struct {
 	// caught here. Unlike BlockedPeakCount this counts the migration itself, which
 	// the blocked-writer count deliberately excludes.
 	MigrationLockWaited bool `json:"migration_lock_waited"`
+	// MigrationLockModeRequested is the strongest relation-level lock mode the
+	// migration's OWN backend was seen holding OR waiting for on a pre-existing
+	// relation, regardless of grant status. LockModes above is granted-only — the
+	// locks that actually blocked somebody — so a run that spent its whole window
+	// QUEUED for an ungranted lock (a hostile ADD COLUMN behind a held transaction),
+	// or whose sub-250ms granted window the sampler missed, reports LockModes empty
+	// even though a lock was central to the freeze. This field catches that case: it
+	// is evidence of the migration's lock INTENT, not proof of a held lock, and must
+	// never be folded into LockModes. Empty when nothing was seen.
+	MigrationLockModeRequested string `json:"migration_lock_mode_requested,omitempty"`
 	// Samples is how many polls completed successfully.
 	Samples int `json:"samples"`
 	// FailedSamples is how many polls failed. Non-zero means the numbers above
@@ -194,6 +204,7 @@ type Monitor struct {
 	tracker   blockedTracker
 	modes     map[string]struct{}
 	migWaited bool
+	reqMode   string
 	samples   int
 	failed    int
 	lastErr   error
@@ -309,6 +320,7 @@ func (m *Monitor) sample(ctx context.Context) {
 	// discarding the blocked count already in hand.
 	modes, modesErr := m.queryLockModes(qctx)
 	migWaiting, waitErr := m.queryMigrationWaiting(qctx)
+	reqMode, reqErr := m.queryMigrationLockMode(qctx)
 
 	m.mu.Lock()
 	m.tracker.observe(time.Now(), blocked)
@@ -317,6 +329,12 @@ func (m *Monitor) sample(ctx context.Context) {
 	}
 	if migWaiting {
 		m.migWaited = true
+	}
+	if reqMode != "" && Strength(reqMode) > Strength(m.reqMode) {
+		// Keep the strongest lock the migration's backend was ever seen holding or
+		// waiting for. Strength(unknown)==0, so an unrecognised spelling only wins
+		// over "nothing seen yet".
+		m.reqMode = reqMode
 	}
 	if modesErr == nil && waitErr == nil {
 		// A poll counts as a completed sample only when the whole poll succeeded,
@@ -330,6 +348,9 @@ func (m *Monitor) sample(ctx context.Context) {
 	}
 	if waitErr != nil {
 		m.record(waitErr)
+	}
+	if reqErr != nil {
+		m.record(reqErr)
 	}
 }
 
@@ -436,6 +457,43 @@ func (m *Monitor) queryLockModes(ctx context.Context) ([]string, error) {
 	return out, nil
 }
 
+// queryMigrationLockMode returns the strongest relation-level lock mode the
+// migration's OWN backend currently holds OR is waiting for on a pre-existing
+// relation, IGNORING grant status. It is the deliberate complement to
+// queryLockModes (granted-only): the wait phase of a hostile run, and the tiny
+// granted window of a sub-250ms metadata change, are exactly what queryLockModes
+// excludes, which leaves LockModes empty on runs where a lock was nonetheless the
+// whole story. This names that lock as INTENT, never as a held lock. New relations
+// the migration created are excluded by the same pre-existing-OID filter.
+func (m *Monitor) queryMigrationLockMode(ctx context.Context) (string, error) {
+	rows, err := m.conn.Query(ctx, `
+		SELECT l.mode
+		FROM pg_locks l
+		JOIN pg_stat_activity a ON a.pid = l.pid
+		WHERE a.datname = current_database()
+		  AND a.application_name = $1
+		  AND l.locktype = 'relation'
+		  AND l.relation = ANY($2::oid[])`, m.cfg.AppName, m.preexisting)
+	if err != nil {
+		return "", fmt.Errorf("monitor: migration lock mode: %w", err)
+	}
+	defer rows.Close()
+	var strongest string
+	for rows.Next() {
+		var mode string
+		if err := rows.Scan(&mode); err != nil {
+			return "", fmt.Errorf("monitor: scan migration lock mode: %w", err)
+		}
+		if Strength(mode) > Strength(strongest) {
+			strongest = mode
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return "", fmt.Errorf("monitor: migration lock mode: %w", err)
+	}
+	return strongest, nil
+}
+
 // StopAndReport halts polling, closes the connection, and returns what was
 // seen. Idempotent; safe on a Monitor whose Start failed or was never called.
 func (m *Monitor) StopAndReport() Report {
@@ -461,12 +519,13 @@ func (m *Monitor) StopAndReport() Report {
 	defer m.mu.Unlock()
 
 	rep := Report{
-		BlockedPeakCount:    m.tracker.peak,
-		BlockedSeconds:      round1ms(m.tracker.blocked),
-		MigrationLockWaited: m.migWaited,
-		Samples:             m.samples,
-		FailedSamples:       m.failed,
-		LockModes:           sortModes(m.modes),
+		BlockedPeakCount:           m.tracker.peak,
+		BlockedSeconds:             round1ms(m.tracker.blocked),
+		MigrationLockWaited:        m.migWaited,
+		MigrationLockModeRequested: m.reqMode,
+		Samples:                    m.samples,
+		FailedSamples:              m.failed,
+		LockModes:                  sortModes(m.modes),
 	}
 	if len(rep.LockModes) > 0 {
 		rep.StrongestLockMode = rep.LockModes[0]

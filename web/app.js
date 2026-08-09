@@ -1076,7 +1076,14 @@ const API = window.BRACE_API_BASE || (/^web-[^.]+\./.test(location.host)
         'Model: <code>' + model.replace(/[<>&]/g, '') + '</code>' +
         (sp.measured_at_floor
           ? '. The measured freeze was at the floor (nothing was contending), so the figure above is modelled, not scaled from a real freeze.'
-          : '.');
+          : '.') +
+        (sp.qualifier === 'modeled_beyond_measurement'
+          ? ' This is a &gt;20× extrapolation (' +
+            (sp.target_rows_source === 'brace_default_assumption'
+              ? 'against an ASSUMED size — nobody told Brace your real row count; '
+              : '') +
+            'qualifier <code>modeled_beyond_measurement</code>): the linear model is a LOWER bound — real index/rewrite cost is super-linear, so treat the number as an order of magnitude, not a precise figure.'
+          : '');
     }
     var btn = slot(card, 'whyBtn');
     if (btn && f) {

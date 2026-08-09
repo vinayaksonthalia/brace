@@ -104,6 +104,11 @@ type StatementResult struct {
 	DurationSeconds float64 `json:"duration_seconds"`
 	// Explanation is the teach text for this statement's shape.
 	Explanation string `json:"explanation"`
+	// ShapeNote carries this statement's GENERAL shape behaviour when the step
+	// produced no measurement (ERRORED / INCONCLUSIVE / SKIPPED). Explanation then
+	// states only that the step measured nothing; the shape lesson lives here,
+	// explicitly not-a-measurement, so it is never quoted as this step's finding.
+	ShapeNote string `json:"shape_note,omitempty"`
 	// Suggestion is the safe rewrite for this statement, when one exists.
 	Suggestion string `json:"suggestion,omitempty"`
 	// Error is this statement's own failure, if PostgreSQL refused it. A non-empty
@@ -549,6 +554,14 @@ func (e *Engine) runSequenceOn(ctx context.Context, twin *twins.Twin, plans []st
 	var maxBlocked float64
 	var anyAcqQualifier bool
 	modeSet := map[string]struct{}{}
+	// Worst-of scale projection across the steps, for the top-level roll-up. worstProj
+	// is the highest-ranked KNOWN projection; anyProjPopulated is the first projection
+	// with real sizes (Known() or not), used as an honest fallback when nothing could
+	// be projected so the top level never emits an all-zeros stub.
+	worstProjRank := -1
+	var worstProj ScaleProjection
+	var worstProjWarn string
+	var anyProjPopulated ScaleProjection
 
 	for i, m := range runsMeasured {
 		blocked := blockedSecondsBetween(res.Timeline, m.startT, m.endT, baseline)
@@ -622,6 +635,31 @@ func (e *Engine) runSequenceOn(ctx context.Context, twin *twins.Twin, plans []st
 			anyAcqQualifier = true
 		}
 
+		// shape_note separation: a step that produced no measurement must not carry
+		// the general per-shape lesson in `explanation`, where it could be quoted as
+		// this step's finding. Move it to shape_note.
+		if verdict != VerdictSafe && verdict != VerdictUnsafe {
+			sr.ShapeNote = "General behaviour of this SHAPE — NOT a measurement of this run: " + m.plan.as.Lesson.Explanation
+			sr.Explanation = nonMeasuredExplanation(verdict)
+		}
+		// Empty held-lock list with lock evidence: name the mode the monitor saw the
+		// statement hold-or-await, so an empty lock_modes is not misread as "no lock".
+		if len(sr.LockModes) == 0 {
+			sr.Note = appendSentence(sr.Note, lockModeNoteLine(sr.BlockedSeconds, sr.Casualties.Total, verdict, m.report))
+		}
+		// Track the worst-of projection for the top-level roll-up.
+		if sr.ScaleProjection.TwinRows > 0 && anyProjPopulated.TwinRows == 0 {
+			anyProjPopulated = sr.ScaleProjection
+		}
+		if sr.ScaleProjection.Known() {
+			if r := verdictRank(sr.ScaleProjection.Verdict); r > worstProjRank ||
+				(r == worstProjRank && sr.ScaleProjection.ProjectedBlockedSeconds > worstProj.ProjectedBlockedSeconds) {
+				worstProjRank = r
+				worstProj = sr.ScaleProjection
+				worstProjWarn = sr.ScaleWarning
+			}
+		}
+
 		res.Statements = append(res.Statements, sr)
 
 		// Roll the worst-of and the totals.
@@ -652,7 +690,8 @@ func (e *Engine) runSequenceOn(ctx context.Context, twin *twins.Twin, plans []st
 				Classification: plans[i].as.Classification,
 				Verdict:        VerdictSkipped,
 				LockModes:      []string{},
-				Explanation:    plans[i].as.Lesson.Explanation,
+				Explanation:    nonMeasuredExplanation(VerdictSkipped),
+				ShapeNote:      "General behaviour of this SHAPE — NOT a measurement (this step never ran): " + plans[i].as.Lesson.Explanation,
 				Suggestion:     plans[i].as.Lesson.Suggestion,
 				Error:          "not run: an earlier statement in the sequence failed, so the migration halted before this one.",
 			})
@@ -677,6 +716,17 @@ func (e *Engine) runSequenceOn(ctx context.Context, twin *twins.Twin, plans []st
 	res.EffectiveVerdict = verdictForRank(maxEffRank)
 	if res.EffectiveVerdict == "" {
 		res.EffectiveVerdict = res.Verdict
+	}
+	// Top-level scale projection: the worst-of the per-statement projections, so it
+	// matches the top-level EffectiveVerdict instead of emitting an all-zeros stub
+	// that would read as "no projection / nothing to worry about". When no step
+	// projected, fall back to a populated-but-unknown projection (real sizes + model,
+	// empty verdict → Known()==false) rather than a bare zero.
+	if worstProjRank >= 0 {
+		res.ScaleProjection = worstProj
+		res.ScaleWarning = worstProjWarn
+	} else {
+		res.ScaleProjection = anyProjPopulated
 	}
 	res.Classification = worstClass
 	res.BlockedSeconds = maxBlocked

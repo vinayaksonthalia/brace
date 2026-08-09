@@ -42,7 +42,7 @@ const maxTargetRows = 1e12
 
 // ScaleModelLinear names the assumption the projection makes, in one line, so
 // nobody has to read this file to know what they are trusting.
-const ScaleModelLinear = "linear in row count (index build and table rewrite are both O(rows))"
+const ScaleModelLinear = "a linear-in-rows floor — projected = measured × target_rows ÷ twin_rows; real index-build and table-rewrite cost is super-linear (≈ O(n·log n) or worse), so the projected freeze is a LOWER bound, never an over-estimate"
 
 // Where TargetRows came from. It is published because the three cases carry
 // very different weight: a number the caller sent for THIS run is a fact about
@@ -106,6 +106,13 @@ type ScaleProjection struct {
 	// grow with the table?". False for a catalog-only change, where the linear
 	// model does not apply at all and the projection is suppressed.
 	ScalesWithRows bool `json:"scales_with_rows"`
+	// Qualifier names what this PROJECTION does not establish — distinct from the
+	// run-level qualifier. Today the only value is QualifierModeledBeyondMeasurement,
+	// set when TargetRows/TwinRows exceeds highExtrapolationRatio (~20x): past that
+	// the linear model is an order-of-magnitude flag, not a number, and a LOWER
+	// bound because real index/rewrite cost is super-linear. Empty within measured
+	// range (or when no projection was made).
+	Qualifier string `json:"qualifier,omitempty"`
 }
 
 // Known reports whether a projection was actually computed.
@@ -240,6 +247,13 @@ func projectScale(in scaleInputs) ScaleProjection {
 	// A projection has no observed casualties of its own: it is a duration
 	// scaled onto a bigger table. Judge it on the projected freeze alone.
 	p.Verdict = verdictFor(p.ProjectedBlockedSeconds, 0)
+	if ratio >= highExtrapolationRatio {
+		// Past ~20x the linear projection is arithmetic well beyond what one
+		// measurement can vouch for. Flag it distinctly (a LOWER bound, since real
+		// index/rewrite cost is super-linear) so the reader treats the number as an
+		// order of magnitude. It never softens the verdict — the escalation stands.
+		p.Qualifier = QualifierModeledBeyondMeasurement
+	}
 	return p
 }
 
@@ -286,12 +300,19 @@ func scaleWarning(measured string, p ScaleProjection) string {
 	}
 	target := fmt.Sprintf("your %s-row table", commas(p.TargetRows))
 	tail := "Rehearse against a larger sample before shipping."
-	if p.TargetRowsAssumed {
+	switch {
+	case p.TargetRowsAssumed:
 		// Nobody told us how big their table is. The projection is still the
 		// useful thing to show — but it is arithmetic on an assumption, and
 		// saying "your table" about a number Brace invented would be a lie.
 		target = fmt.Sprintf("a %s-row table (ASSUMED — nobody told Brace your real size)", commas(p.TargetRows))
 		tail = "Pass target_rows (or set BRACE_TARGET_ROWS) to project onto your actual table instead of this assumption."
+	case p.TargetRowsSource == TargetSourceDeployment:
+		// A standing operator default (BRACE_TARGET_ROWS), not a size the caller
+		// passed for THIS run. Say so, so an agent that supplied nothing does not
+		// read "your table" about the deployment's number.
+		target = fmt.Sprintf("a %s-row table (the deployment's BRACE_TARGET_ROWS — not a size passed for this run)", commas(p.TargetRows))
+		tail = "Pass target_rows on the run to project onto a different table; otherwise this uses the deployment-configured size."
 	}
 	if ratio := float64(p.TargetRows) / float64(p.TwinRows); ratio >= highExtrapolationRatio {
 		// A 2x projection is credible; a 200x one is arithmetic far past what one

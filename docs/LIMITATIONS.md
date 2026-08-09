@@ -28,10 +28,26 @@ Brace's answer is the scale projection, not a bigger twin: `BRACE_TARGET_ROWS`
 project the *measured* freeze onto the row count you supply, and the verdict
 follows `effective_verdict` — measured **or** projected. A `CREATE INDEX` that
 measures 7.5s on 10M rows and projects to 375s at 500M rows is reported
-UNSAFE even though nothing bad happened in the rehearsal itself. The
-projection is a model, not a second measurement — it has not been validated
-across arbitrary index types, fill factors, or hardware, and it will be wrong
-in ways a real crash test at your actual scale would not be.
+UNSAFE even though nothing bad happened in the rehearsal itself.
+
+The projection is a model, not a second measurement, and it is deliberately a
+**linear floor**: `projected = measured × target_rows ÷ twin_rows`. Real
+index-build and table-rewrite cost is **super-linear** (≈ O(*n* log *n*) or
+worse), so the projected freeze is a **lower bound** — at least this long, and
+usually longer, never shorter. Past ~20× the twin size the number is an
+order-of-magnitude flag rather than a figure, and the projection says so with
+`scale_projection.qualifier = "modeled_beyond_measurement"`. It has not been
+validated across arbitrary index types, fill factors, or hardware, and it will
+be wrong in ways a real crash test at your actual scale would not be.
+
+The projection also reports **whose row count it used**, in
+`scale_projection.target_rows_source`: `request` (you passed `target_rows` for
+this run), `deployment` (the deployment's `BRACE_TARGET_ROWS`), or
+`brace_default_assumption` (nobody supplied one, so Brace assumed a size —
+~100M rows — to keep the false-safe defence on by default). Over MCP, leaving
+`target_rows` at 0 does **not** skip the projection: it falls back to the
+deployment default or that assumption, and the source field plus the note say
+which, loudly, so an assumed size is never read as a fact about your table.
 
 ## The traffic model is a caricature of production
 
@@ -99,3 +115,47 @@ Zerops hardware it was built and deployed on (2–3 dedicated vCPU, PostgreSQL
 16, `NON_HA`). Absolute seconds will differ on different hardware; the
 *relative* ordering (naive `ADD COLUMN ... DEFAULT random()` is far worse
 than `CREATE INDEX CONCURRENTLY`) is the part expected to generalize.
+
+## A bring-your-own-schema twin is a capped sample
+
+`schema_ddl` runs against a disposable copy of your table, but the seed is
+capped at **5,000,000 rows** for the shared lab no matter how large a
+`row_count` you state. When your stated size exceeds the cap, the twin is built
+with the capped sample and everything above it is **projection, not
+measurement** — the run note says the twin was built with N rows and the rest
+is projection, and a SAFE there is a SAFE *on the sample*. Gate on
+`effective_verdict`, which carries the projection onto your stated size.
+
+## `explanation` vs `shape_note` on a run that measured nothing
+
+An `ERRORED`, `INCONCLUSIVE`, or `SKIPPED` result measured nothing — the
+statement never executed, was aborted before it finished, or never ran because
+an earlier step failed. For those, `explanation` states only that fact, and the
+general behaviour of the shape is moved to a separate **`shape_note`** field.
+The two are kept apart on purpose: the shape text reads like a finding, and an
+agent scanning `explanation` must never be able to quote it as *this run's*
+measurement.
+
+## Empty `lock_modes` does not mean "no lock"
+
+Brace samples `pg_locks` every 250ms and reports in `lock_modes` only the
+**granted, write-blocking** locks it caught on **pre-existing** tables. Two real
+cases leave `lock_modes` empty even though a lock was central to the freeze: a
+metadata change that holds `ACCESS EXCLUSIVE` for less than one sample interval,
+and a run (a hostile `ADD COLUMN`) that spends its whole window **waiting** for
+an ungranted lock — which the granted-only filter deliberately excludes. The
+monitor separately captures the mode the migration was seen holding *or*
+awaiting (`monitor.migration_lock_mode_requested`), and the run note names it so
+an empty `lock_modes` is never misread as "took no locks". It is evidence of the
+migration's lock intent, not proof of a held lock, and is never folded into
+`lock_modes`.
+
+## A sequence's top-level projection is the worst of its steps
+
+For a multi-statement sequence, the top-level `scale_projection` is the
+**worst-of** the per-statement projections — the one driving the top-level
+`effective_verdict` — rather than an all-zeros stub. When no step could be
+projected (every step catalog-only or `CONCURRENTLY`), the top-level projection
+carries the real twin/target sizes and model with an empty `verdict`
+(`Known() == false`), which is the honest "no projection made", never a
+fabricated zero.

@@ -230,17 +230,29 @@ func TestErroredExplanationIsMarkedGeneral(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Assess: %v", err)
 	}
-	const marker = "did not run to a measured result"
+	lesson := as.Lesson.Explanation
 	for _, verdict := range []string{VerdictErrored, VerdictInconclusive} {
 		res := &RunResult{Verdict: verdict}
 		got := explanationFor(res, as)
-		if !strings.Contains(got, marker) {
-			t.Errorf("%s explanation not marked as general behaviour:\n%s", verdict, got)
+		// New contract: explanation states only that this run measured nothing and
+		// points at shape_note; it must NOT carry the shape lesson (which reads like a
+		// finding). The lesson moves to shape_note, labelled not-a-measurement.
+		if !strings.Contains(got, "shape_note") {
+			t.Errorf("%s explanation must point at shape_note:\n%s", verdict, got)
+		}
+		if strings.Contains(got, lesson) {
+			t.Errorf("%s explanation must not carry the shape lesson (it belongs in shape_note):\n%s", verdict, got)
+		}
+		if !strings.Contains(res.ShapeNote, "NOT a measurement") || !strings.Contains(res.ShapeNote, lesson) {
+			t.Errorf("%s shape_note must carry the lesson, labelled not-a-measurement:\n%s", verdict, res.ShapeNote)
 		}
 	}
-	// A measured run keeps the plain lesson.
+	// A measured run keeps the plain lesson and sets no shape_note.
 	measured := &RunResult{Verdict: VerdictSafe}
-	if got := explanationFor(measured, as); strings.Contains(got, marker) {
-		t.Errorf("a measured run's explanation was wrongly marked as unrun:\n%s", got)
+	if got := explanationFor(measured, as); got != lesson {
+		t.Errorf("a measured run's explanation must be the plain lesson:\n%s", got)
+	}
+	if measured.ShapeNote != "" {
+		t.Errorf("a measured run must not set shape_note:\n%s", measured.ShapeNote)
 	}
 }
