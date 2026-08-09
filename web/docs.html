@@ -108,6 +108,7 @@ document.documentElement.className+=' js';})();</script>
             <li><a class="navlink" href="#usage" data-nav><span class="navlink__ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="12" height="10" rx="1.6"/><path d="M2 6h12M4.4 4.5h.01M6 4.5h.01"/></svg></span><span>The web lab</span></a></li>
             <li><a class="navlink" href="#cli" data-nav><span class="navlink__ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="12" height="10" rx="1.6"/><path d="M4.8 6.8 6.6 8.5 4.8 10.2M8.6 10.5h2.8"/></svg></span><span>CLI deploy-gate</span></a></li>
             <li><a class="navlink" href="#mcp" data-nav><span class="navlink__ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="10" height="8" rx="2"/><path d="M8 2v3M5.7 8.4h.01M10.3 8.4h.01M6.4 11h3.2"/></svg></span><span>MCP verb</span></a></li>
+            <li><a class="navlink" href="#schema" data-nav><span class="navlink__ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="2.6" y="2.6" width="10.8" height="10.8" rx="1.6"/><path d="M2.6 6.2h10.8M6.2 6.2v7.2"/></svg></span><span>Bring your own schema</span></a></li>
           </ul>
         </div>
         <div class="navgroup">
@@ -412,6 +413,10 @@ zcli push --serviceId &lt;mcp-id&gt; --setup mcp <span class="c"># the hosted MC
         <li><strong>The catalog itself</strong> — <code>pg_stat_activity</code> and <code>pg_locks</code>, sampled directly every <strong>250&nbsp;ms</strong> during the run, showing the blocking lock held and the writers queued behind it.</li>
       </ul>
       <p>A casualty is counted <strong>only</strong> for a genuine <code>55P03</code> lock timeout — never inferred from a slow response, a cancellation (<code>57014</code>), or a deadlock (<code>40P01</code>). The report then translates the raw count into user terms: not "432 writes rolled back" but 432 denied checkouts, logins and cart-adds, broken out by label.</p>
+      <div class="callout">
+        <span class="callout__mark">what the labels are</span>
+        <p>Those three labels — <code>checkout</code>, <code>login</code>, <code>add_to_cart</code> — are <strong>simulated</strong>. In the stock lab all three run the <em>identical</em> synthetic <code>INSERT INTO orders</code>; the names are cosmetic tags applied by weight (5 add-to-cart : 3 checkout : 2 login), not three distinct operations. So "432 denied checkouts and cart-adds" means "432 synthetic writes, split across three labels" — a realistic <em>shape</em> of failure, not a replay of real user actions. To label your own real write mix, self-host with <code>BRACE_LOAD_LABELS</code> (see <a href="#byod">Bring your own data</a>).</p>
+      </div>
 
       <figure class="shot shot--tall">
         <div class="shot__frame">
@@ -490,6 +495,7 @@ zcli push --serviceId &lt;mcp-id&gt; --setup mcp <span class="c"># the hosted MC
       </div>
 
       <p>This is the real-world lock-acquisition cascade — the outage pattern nobody else reproduces — turned into a measured number instead of a footnote. Set it per run (<code>hostile: true</code>) or globally (<code>BRACE_HOSTILE</code>).</p>
+      <p>By default Brace holds that transaction for <strong>2&nbsp;seconds</strong> per cycle and reports the figure back as <code>contention.hold_seconds</code>. The measured freeze is therefore <em>relative to that hold</em>: it is what this migration does when it has to queue behind a 2s transaction — shorter if nothing on your table ever stays open that long, longer if something does. It is a measurement of the migration <em>behind a stated hold</em>, not a property of the migration alone, and the report says so.</p>
 
       <div class="callout">
         <span class="callout__mark">no false greens</span>
@@ -514,7 +520,7 @@ zcli push --serviceId &lt;mcp-id&gt; --setup mcp <span class="c"># the hosted MC
 
       <div class="callout">
         <span class="callout__mark">assumption</span>
-        <p>The projection is a <strong>linear-in-rows floor</strong>, not a second measurement: <code>projected = measured × target ÷ twin</code>. Real index-build and table-rewrite cost is <strong>super-linear</strong> (≈ O(<em>n</em> log <em>n</em>) or worse), so the projected freeze is a <strong>lower bound</strong> — the true freeze is at least this and usually longer, never shorter. Past ~20× the twin the number is an order of magnitude, not a figure: the projection then carries <code>qualifier: "modeled_beyond_measurement"</code>. It always reports <code>target_rows_source</code> — <code>request</code> (you passed it), <code>deployment</code> (the lab's <code>BRACE_TARGET_ROWS</code>), or <code>brace_default_assumption</code> (nobody said, so Brace assumed a size and says so loudly). It has not been validated across arbitrary index types, fill factors, or hardware, and it will be wrong in ways a real crash test at your actual scale would not be.</p>
+        <p>The projection is a <strong>linear-in-rows floor</strong>, not a second measurement: <code>projected = measured × target ÷ twin</code>. Real index-build and table-rewrite cost is <strong>super-linear</strong> (≈ O(<em>n</em> log <em>n</em>) or worse), so the projected freeze is a <strong>lower bound</strong> — the true freeze is at least this and usually longer, never shorter. Past ~20× the twin the number is an order of magnitude, not a figure: the projection then carries <code>qualifier: "modeled_beyond_measurement"</code>. It always reports <code>target_rows_source</code> — <code>request</code> (you passed it), <code>deployment</code> (the lab's <code>BRACE_TARGET_ROWS</code>), or <code>brace_default_assumption</code> (nobody said, so Brace assumed a size, also flagged <code>target_rows_assumed: true</code>, and says so loudly). It has not been validated across arbitrary index types, fill factors, or hardware, and it will be wrong in ways a real crash test at your actual scale would not be.</p>
       </div>
     </section>
 
@@ -715,6 +721,37 @@ claude mcp add brace -- "$PWD/mcp/.venv/bin/python" "$PWD/mcp/server.py"
       </div>
       <p>Every transport exposes the same three tools — <code>check_migration</code>, <code>get_result</code> and <code>lab_status</code> — so an agent gets the async slow-migration recovery path above whether it connects by URL, through the <code>mcp-remote</code> bridge, or over local stdio.</p>
       <p>Then just ask your agent: <em>"use brace to check <code>CREATE INDEX idx_orders_email ON orders (email)</code> before I ship it — with hostile mode on."</em> It runs a real rehearsal and refuses to ship an outage.</p>
+    </section>
+
+    <!-- ══ 08b · BRING YOUR OWN SCHEMA ═════════════════════════ -->
+    <section class="doc-sec reveal" id="schema" data-title="Bring your own schema">
+      <p class="eyebrow">Using it · your table shape</p>
+      <h2>Rehearse against your own table — no self-host.</h2>
+      <p class="doc-lede">The public lab carries one table, <code>orders</code>. Paste your own <code>CREATE TABLE</code> and Brace builds a disposable, isolated database from it, seeds a bounded sample of type-aware synthetic rows, runs your migration against <em>that</em> shape, and drops the whole database when the run ends. This is distinct from <a href="#byod">bringing your own <em>data</em></a>: that restores a real dump and needs self-hosting; this rehearses your <em>shape</em> on the shared public lab.</p>
+
+      <div class="doc-code">
+        <div class="doc-code__cap"><b>paste a shape, rehearse against it</b></div>
+<pre>check_migration(
+  schema_ddl="CREATE TABLE invoices (id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+                account_id uuid NOT NULL, amount_cents numeric(12,2) NOT NULL,
+                created_at timestamptz NOT NULL DEFAULT now())",
+  row_count=100000000,                       <span class="c"># your real size → drives the projection</span>
+  sql="CREATE INDEX ON invoices (account_id)")
+<span class="c"># over HTTP: POST /api/run { schema_ddl, row_count?, sql }</span></pre>
+      </div>
+
+      <h3>What Brace does and doesn't do with your shape</h3>
+      <ul>
+        <li><strong>One plain <code>CREATE TABLE</code>.</strong> Exactly one statement — <code>CREATE TABLE</code> or <code>CREATE TABLE IF NOT EXISTS</code>. Temporary, unlogged and <code>CREATE TABLE … AS</code> forms are refused, and a second smuggled statement is rejected before a database is spent. Multiple related tables are not accepted here.</li>
+        <li><strong>Type-aware synthetic rows.</strong> Brace reads the created table back from the catalog and fills the columns it must — <code>NOT NULL</code>, no default, not identity/generated — from a fixed whitelist (integers, <code>numeric</code>, <code>text</code>/<code>varchar</code>, <code>uuid</code>, timestamp/date/time, <code>json</code>/<code>jsonb</code>, <code>inet</code>, <code>bytea</code>, <code>boolean</code>, <code>text[]</code>). A required column of a type outside that whitelist is <strong>rejected</strong> with the column named — never silently filled with NULL or a wrong value.</li>
+        <li><strong>Generic <code>write</code> traffic, not personas.</strong> The load against your table is a single label named <code>write</code>, so <code>casualties.by_label</code> here has one key — <code>write</code> — not the stock <code>checkout</code>/<code>login</code>/<code>add_to_cart</code> split. Describing a real per-operation mix still needs self-hosting and <code>BRACE_LOAD_LABELS</code>.</li>
+        <li><strong>The seed is bounded; your size drives the projection.</strong> <code>row_count</code> is your approximate real table size. It sets the scale-projection target, but the number of rows actually seeded is clamped to <strong>5,000,000</strong> (default 1,000,000 when omitted) so one paste can't starve the shared pool. The freeze is measured on the seeded sample and then projected onto your <code>row_count</code> — the same measured-or-projected <code>effective_verdict</code> the stock lab uses.</li>
+      </ul>
+
+      <div class="callout">
+        <span class="callout__mark">planner realism</span>
+        <p>The synthetic rows are type-correct but not distributed like your data: selectivity, skew and index choice can differ from production even at the same row count. When planner behaviour is exactly what you're rehearsing, restore a real dump instead — see <a href="#byod">Bring your own data</a>.</p>
+      </div>
     </section>
 
     <!-- ══ 09 · BRING YOUR OWN DATA ═════════════════════════════ -->

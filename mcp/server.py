@@ -248,11 +248,18 @@ def check_migration(
     the returned run_id.
 
     schema_ddl: rehearse against YOUR OWN table instead of the demo's. Pass a
-    single CREATE TABLE statement and Brace builds a disposable, isolated database
-    from it, seeds a bounded sample of synthetic rows (type-aware), runs sql
-    against THAT shape, and drops everything afterwards. row_count is your
-    approximate real table size: it drives the scale projection and (clamped) how
-    many rows are seeded. Leave schema_ddl empty to use the stock orders table.
+    SINGLE plain CREATE TABLE statement (not multiple tables, not CREATE TABLE ...
+    AS, not temp/unlogged) and Brace builds a disposable, isolated database from
+    it, seeds a bounded sample of type-aware synthetic rows, runs sql against THAT
+    shape, and drops everything afterwards. A required column of a type Brace
+    cannot synthesize is REJECTED by name — never silently filled with NULL or a
+    wrong value. The load against your table is a single generic label named
+    "write" (so casualties.by_label has one key, "write", not the stock
+    checkout/login/add_to_cart split). row_count is your approximate real table
+    size: it drives the scale projection, while the number of rows ACTUALLY seeded
+    is clamped to 5,000,000 (default 1,000,000) so one paste can't starve the
+    shared pool — the freeze is measured on that sample and projected onto
+    row_count. Leave schema_ddl empty to use the stock orders table.
 
     deadline_ms: the per-request lock deadline of YOUR application — the wait after
     which one of your write requests would give up. A casualty is a write that
@@ -260,7 +267,11 @@ def check_migration(
     of the casualty count. Pass your real client/HTTP timeout and the casualty
     count reflects YOUR environment, not the lab's; leave it 0 for the lab default
     (1500ms), and note the deadline that produced any count comes back on
-    casualties.deadline_ms. Bounded to 30s.
+    casualties.deadline_ms. Bounded to 30s. The casualty total is broken out in
+    casualties.by_label; on a stock (orders) run those keys are
+    checkout/login/add_to_cart — three cosmetic tags on the SAME synthetic INSERT
+    (weighted 3/2/5), not three distinct operations — while a schema_ddl run
+    reports a single "write" label.
 
     statements: run a MULTI-STATEMENT migration as an ordered SEQUENCE on ONE twin
     instead of a single statement. Pass a list like

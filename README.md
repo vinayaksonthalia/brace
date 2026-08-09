@@ -199,7 +199,7 @@ claude mcp add --transport http brace https://mcp-2a61-8080.prg1.zerops.app/mcp
 
 Then just ask: *"use brace to check `ALTER TABLE orders ADD COLUMN promo int` before I ship it — with hostile mode on."* It runs a real rehearsal and refuses to ship an outage. `check_migration` returns `effective_verdict` (SAFE/UNSAFE/INCONCLUSIVE/ERRORED, plus REJECTED / RATE_LIMITED / PENDING for a strict gate); a slow migration returns a `run_id` you fetch with `get_result` — no result is ever lost to a timeout, and a nonexistent table is REJECTED, never SAFE. (Or run `mcp/server.py` locally over stdio, or self-hosted against your own database — see [docs/BYOD.md](docs/BYOD.md).)
 
-**A whole migration script, not one statement.** Pass `statements=[...]` (an ordered list, ≤10) instead of `sql` and Brace runs the sequence **on one twin**, so a later step sees the schema the earlier steps produced — a `CREATE INDEX` on a column the sequence just added no longer ERRORs the way two separate runs would. Each step is measured in its own window; the top-level verdict is the **worst-of**, so gating on `effective_verdict` blocks the deploy if *any* step would freeze writes, and the per-statement array shows *which* step is the killer. **Match your own deadline** with `deadline_ms`: a casualty is a write that waited past a deadline, so `casualties.deadline_ms` reflects *your* app's real per-request lock timeout, not just the lab default.
+**A whole migration script, not one statement.** Pass `statements=[...]` (an ordered list, ≤10) instead of `sql` and Brace runs the sequence **on one twin**, so a later step sees the schema the earlier steps produced — a `CREATE INDEX` on a column the sequence just added no longer ERRORs the way two separate runs would. Each step is measured in its own window; the top-level verdict is the **worst-of**, so gating on `effective_verdict` blocks the deploy if *any* step would freeze writes, and the per-statement array shows *which* step is the killer. **Match your own deadline** with `deadline_ms`: a casualty is a write that waited past a deadline, so `casualties.deadline_ms` reflects *your* app's real per-request lock timeout, not just the lab default. **Or rehearse your own table shape** with `schema_ddl`: paste a single `CREATE TABLE` and Brace builds a throwaway database from it, seeds up to 5M type-aware synthetic rows (your `row_count` still sets the projection target), and drives one generic `write` label against it — no self-host, distinct from bringing your own *data*. A required column of a type Brace can't synthesize is rejected by name, never filled with a wrong value.
 
 ## Teach layer
 
@@ -212,6 +212,8 @@ The point isn't the verdict — it's that the person reading it understands *why
 ## Honest limits
 
 Brace is a rehearsal, not a guarantee. Full detail, including what the scale projection does and doesn't validate, why the traffic model is a caricature, and why `CREATE INDEX CONCURRENTLY` has its own failure mode Brace doesn't simulate: **[docs/LIMITATIONS.md](docs/LIMITATIONS.md)**.
+
+One honesty note worth stating up front: the stock traffic's `checkout` / `login` / `add_to_cart` labels are three cosmetic tags on the *same* synthetic `INSERT` (weighted 3 / 2 / 5), so `casualties.by_label` is a weighted split of one write, not a replay of three real user actions. Self-host with `BRACE_LOAD_LABELS` to label your own real mix.
 
 Bringing your own production dump instead of the synthetic 10M-row demo table: **[docs/BYOD.md](docs/BYOD.md)**.
 
